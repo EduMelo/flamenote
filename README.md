@@ -1,0 +1,58 @@
+# flamenote
+
+Notas flutuantes a partir do texto selecionado, no espírito do Flameshot.
+
+Ao iniciar, o programa fica na bandeja. Um atalho global arma a seleção: o cursor vira uma cruz e a caixa de ferramentas ainda não aparece. Esc nesse momento só devolve o cursor. Depois de selecionar texto na janela em foco, a caixa surge ao lado dessa seleção. Nesta versão há uma ferramenta: ela coloca o texto num bilhete branco, de cantos arredondados, sempre por cima das outras janelas. O bilhete pode ser arrastado. Um clique duplo fecha o bilhete. Esc, com a caixa já aberta, fecha só a caixa.
+
+## Requisitos
+
+Esta versão fala com o X11. No Wayland ela não sobe.
+
+A bandeja usa o protocolo clássico do systray (XEmbed), o mesmo da i3bar com `tray_output`. Sem bandeja, o atalho continua valendo e o programa avisa isso uma vez.
+
+GTK 3 desenha as janelas. Com um compositor (picom, por exemplo) a sombra em volta do cartão aparece. Sem compositor, o flamenote recorta os cantos com uma máscara, para não deixar um quadrado preto.
+
+## Compilar e executar
+
+```bash
+cargo build --release
+./target/release/flamenote
+```
+
+No i3, uma linha de autostart:
+
+```
+exec --no-startup-id flamenote
+```
+
+A segunda execução, enquanto a primeira vive, arma a seleção em vez de criar outro processo. Se a trava de instância já estiver ocupada e o pedido não chegar ao processo principal, o programa escreve `flamenote já está em execução.` e sai.
+
+## Configuração
+
+O arquivo fica em `$XDG_CONFIG_HOME/flamenote/config.toml`, ou em `~/.config/flamenote/config.toml`. `FLAMENOTE_CONFIG` aponta para outro caminho. Na primeira execução o programa grava o padrão, se o arquivo ainda não existir, e relê a cada 2 segundos.
+
+```toml
+# Atalho global do flamenote.
+# Modificadores: Ctrl, Alt, Shift, Super.
+# Exemplos: "Super+Shift+N", "Ctrl+Alt+N", "F9"
+hotkey = "Super+Shift+N"
+```
+
+O atalho padrão é `Super+Shift+N`. Esc não pode ser o atalho. Durante a seleção, Esc só devolve o cursor. Com a caixa aberta, Esc fecha a caixa. Um atalho inválido volta para o padrão e a mensagem sai no terminal.
+
+`FLAMENOTE_DEBUG=1` escreve no terminal o que a thread do X11 está fazendo.
+
+## O que esta versão faz
+
+- O atalho, o clique esquerdo na bandeja e o item “Selecionar texto” do menu armam a seleção. O cursor do sistema some e uma cruz segue o ponteiro. A cruz não recebe cliques, então o arrasto continua valendo na janela que está embaixo. A caixa não abre nesse momento. Texto que já estava selecionado antes do atalho não abre a caixa.
+- Esc com a cruz na tela devolve o cursor e não fecha bilhetes. O atalho de novo também cancela.
+- Depois de um arrasto que seleciona texto, ou de uma seleção nova na janela em foco, a caixa aparece ao lado do fim da seleção. A ferramenta começa habilitada com esse texto. Ela fica desabilitada se a seleção sumir antes do clique. Espaço em branco conta como nada selecionado.
+- A ferramenta lê a seleção primária do X11 (PRIMARY). O dono dessa seleção precisa ser a janela em foco, um parente dela na árvore de janelas, outro cliente do mesmo processo (`_NET_WM_PID`) ou a mesma conexão X11. Isso pega a janela invisível em que o GTK e o Chromium guardam a seleção. Duas janelas do mesmo processo podem habilitar a ferramenta mesmo com a seleção na que não está em foco.
+- A caixa de ferramentas não rouba o foco. Clique fora dela não a fecha. Fecham: Esc, o atalho de novo, o clique esquerdo na bandeja, ou o uso da ferramenta.
+- O clique direito na bandeja mostra “Selecionar texto”, o atalho atual (só leitura) e “Sair”.
+- O bilhete mostra o texto capturado, até 20 mil caracteres. Dá para arrastar. Um deslocamento menor que uns 3 pixels não conta como arrasto, para o clique duplo continuar fechando o bilhete.
+- A roda do mouse rola o texto quando ele não cabe.
+
+## Licença
+
+MIT. Copyright (c) 2026 EduMelo.
