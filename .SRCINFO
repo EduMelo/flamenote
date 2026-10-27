@@ -1,0 +1,14 @@
+pkgbase = flamenote
+	pkgdesc = Notas flutuantes a partir do texto selecionado, no espírito do Flameshot
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/EduMelo/flamenote
+	arch = x86_64
+	license = MIT
+	makedepends = rust
+	depends = gtk3
+	depends = libxkbcommon
+	source = flamenote-0.1.0.tar.gz::https://github.com/EduMelo/flamenote/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 5feb0a69688eac35f7f6106562a8c2d2c164cf24082d07ac536ef28e5723c8ad
+
+pkgname = flamenote

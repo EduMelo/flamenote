@@ -1,0 +1,117 @@
+name: Publicar pacote AUR
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    name: Compilar pacote
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.REPOSITORY_TOKEN }}
+
+      - name: Instalar dependências
+        run: pacman -Syu --noconfirm --needed git gtk3 libxkbcommon rust
+
+      - name: Compilar
+        run: |
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          install -d -o builder -g builder /tmp/makepkg
+          su builder -c "BUILDDIR=/tmp/makepkg makepkg --noconfirm --cleanbuild"
+          su builder -c "makepkg --printsrcinfo" > .SRCINFO
+
+      - name: Guardar artefatos
+        uses: actions/upload-artifact@v4
+        with:
+          name: pacote
+          path: |
+            PKGBUILD
+            .SRCINFO
+            flamenote-*.pkg.tar.zst
+          if-no-files-found: error
+
+  publish-github-packages:
+    name: Publicar no GitHub Packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar artefatos
+        uses: actions/download-artifact@v4
+        with:
+          name: pacote
+
+      - name: Instalar ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Enviar artefato OCI
+        env:
+          REPOSITORY_TOKEN: ${{ secrets.REPOSITORY_TOKEN }}
+        run: |
+          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "$REPOSITORY_TOKEN" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
+          oras push "ghcr.io/${owner}/flamenote:${GITHUB_REF_NAME}" \
+            --artifact-type application/vnd.archlinux.pkg \
+            flamenote-*.pkg.tar.zst PKGBUILD .SRCINFO
+
+  publish-aur:
+    name: Publicar no AUR
+    needs: build
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Baixar artefatos
+        uses: actions/download-artifact@v4
+        with:
+          name: pacote
+
+      - name: Verificar chave SSH do AUR
+        id: ssh
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$AUR_SSH_PRIVATE_KEY" ]; then
+            echo "::warning::AUR_SSH_PRIVATE_KEY não configurada; publicação no AUR ignorada."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enviar PKGBUILD e .SRCINFO
+        if: steps.ssh.outputs.enabled == 'true'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          pacman -Syu --noconfirm --needed git openssh
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
+          git config --global user.name "EduMelo"
+          git config --global user.email "dev@edumelo.com.br"
+          if ! git clone ssh://aur@aur.archlinux.org/flamenote.git aur-flamenote; then
+            git init -b master aur-flamenote
+            git -C aur-flamenote remote add origin ssh://aur@aur.archlinux.org/flamenote.git
+          fi
+          cp PKGBUILD .SRCINFO aur-flamenote/
+          cd aur-flamenote
+          git checkout -B master
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "Sem alterações no AUR."
+          else
+            git commit -m "Atualiza para ${GITHUB_REF_NAME}"
+            git push origin master
+          fi
