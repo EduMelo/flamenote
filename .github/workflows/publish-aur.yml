@@ -41,6 +41,7 @@ jobs:
             .SRCINFO
             flamenote-*.pkg.tar.zst
           if-no-files-found: error
+          include-hidden-files: true
 
   publish-github-packages:
     name: Publicar no GitHub Packages
