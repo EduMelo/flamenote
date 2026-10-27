@@ -61,8 +61,13 @@ jobs:
           REPOSITORY_TOKEN: ${{ secrets.REPOSITORY_TOKEN }}
         run: |
           owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          version="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
+          tag="$GITHUB_REF_NAME"
+          if [[ "$tag" != v* ]]; then
+            tag="v${version}"
+          fi
           echo "$REPOSITORY_TOKEN" | oras login ghcr.io -u "${{ github.actor }}" --password-stdin
-          oras push "ghcr.io/${owner}/flamenote:${GITHUB_REF_NAME}" \
+          oras push "ghcr.io/${owner}/flamenote:${tag}" \
             --artifact-type application/vnd.archlinux.pkg \
             flamenote-*.pkg.tar.zst PKGBUILD .SRCINFO
 
@@ -109,10 +114,15 @@ jobs:
           cp PKGBUILD .SRCINFO aur-flamenote/
           cd aur-flamenote
           git checkout -B master
+          version="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
+          tag="$GITHUB_REF_NAME"
+          if [[ "$tag" != v* ]]; then
+            tag="v${version}"
+          fi
           git add PKGBUILD .SRCINFO
           if git diff --cached --quiet; then
             echo "Sem alterações no AUR."
           else
-            git commit -m "Atualiza para ${GITHUB_REF_NAME}"
+            git commit -m "Atualiza para ${tag}"
             git push origin master
           fi
