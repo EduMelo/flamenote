@@ -62,6 +62,12 @@ pub enum Command {
     Arm,
     CloseToolbox,
     Shutdown,
+    /// Solta o atalho global enquanto a janela de configuração escuta teclas.
+    PauseHotkey,
+    /// Volta a reservar o atalho, se a captura foi cancelada.
+    ResumeHotkey,
+    /// Relê o arquivo e reserva o atalho gravado.
+    ReloadConfig,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -115,6 +121,8 @@ struct X11 {
     icon_h: u16,
     atoms: Atoms,
     hotkey: Hotkey,
+    /// Captura na janela de configuração: o grab fica solto.
+    hotkey_paused: bool,
     config: Config,
     hotkey_codes: Vec<u8>,
     escape_codes: Vec<u8>,
@@ -316,6 +324,7 @@ impl X11 {
             icon_h: ICON_PX,
             atoms,
             hotkey: config.hotkey.clone(),
+            hotkey_paused: false,
             config,
             hotkey_codes: Vec::new(),
             escape_codes: Vec::new(),
@@ -526,6 +535,9 @@ impl X11 {
                 Ok(Command::Arm) => self.arm()?,
                 Ok(Command::CloseToolbox) => self.close_toolbox(false)?,
                 Ok(Command::Shutdown) => self.quit = true,
+                Ok(Command::PauseHotkey) => self.pause_hotkey()?,
+                Ok(Command::ResumeHotkey) => self.resume_hotkey()?,
+                Ok(Command::ReloadConfig) => self.reload_config_now()?,
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     self.quit = true;
@@ -862,22 +874,67 @@ impl X11 {
         }
         self.config_check = Instant::now();
         let next = config::reload_if_changed(&self.config);
-        if next.hotkey == self.config.hotkey {
-            self.config = next;
+        self.apply_loaded(next, false)
+    }
+
+    fn reload_config_now(&mut self) -> XResult<()> {
+        self.config_check = Instant::now();
+        let next = config::load_from(&self.config.path);
+        self.apply_loaded(next, true)
+    }
+
+    fn apply_loaded(&mut self, next: Config, force_grab: bool) -> XResult<()> {
+        let changed = next.hotkey != self.config.hotkey;
+        if changed && !self.hotkey_paused {
+            self.ungrab_codes(&self.hotkey_codes.clone(), self.hotkey.modifiers)?;
+        }
+        if changed {
+            self.hotkey = next.hotkey.clone();
+        }
+        self.config = next;
+        if changed {
+            let (min, max) = {
+                let setup = self.conn.setup();
+                (setup.min_keycode, setup.max_keycode)
+            };
+            self.resolve_keycodes(min, max)?;
+            let _ = self
+                .to_gtk
+                .send(AppEvent::HotkeyChanged(self.hotkey.display.clone()));
+        }
+        if force_grab {
+            self.hotkey_paused = false;
+        }
+        if (changed && !self.hotkey_paused) || force_grab {
+            self.grab_hotkey()?;
+            if force_grab && (self.armed || self.toolbox_open) {
+                self.grab_escape()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn pause_hotkey(&mut self) -> XResult<()> {
+        if self.hotkey_paused {
             return Ok(());
         }
         self.ungrab_codes(&self.hotkey_codes.clone(), self.hotkey.modifiers)?;
-        self.hotkey = next.hotkey.clone();
-        self.config = next;
-        let (min, max) = {
-            let setup = self.conn.setup();
-            (setup.min_keycode, setup.max_keycode)
-        };
-        self.resolve_keycodes(min, max)?;
+        if self.armed || self.toolbox_open {
+            self.ungrab_escape()?;
+        }
+        self.hotkey_paused = true;
+        Ok(())
+    }
+
+    fn resume_hotkey(&mut self) -> XResult<()> {
+        if !self.hotkey_paused {
+            return Ok(());
+        }
+        self.hotkey_paused = false;
         self.grab_hotkey()?;
-        let _ = self
-            .to_gtk
-            .send(AppEvent::HotkeyChanged(self.hotkey.display.clone()));
+        if self.armed || self.toolbox_open {
+            self.grab_escape()?;
+        }
         Ok(())
     }
 

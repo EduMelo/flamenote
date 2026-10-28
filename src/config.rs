@@ -81,6 +81,99 @@ pub fn reload_if_changed(current: &Config) -> Config {
     next
 }
 
+/// Lê o arquivo de novo, mesmo que o mtime não tenha mudado.
+pub fn load_from(path: &Path) -> Config {
+    read_path(path)
+}
+
+/// Modificadores vistos num key-press, sem Lock nem NumLock.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureMods {
+    pub super_key: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub mod3: bool,
+    pub mod5: bool,
+}
+
+pub fn is_modifier_key(name: &str) -> bool {
+    matches!(
+        name,
+        "Shift_L"
+            | "Shift_R"
+            | "Control_L"
+            | "Control_R"
+            | "Alt_L"
+            | "Alt_R"
+            | "Meta_L"
+            | "Meta_R"
+            | "Super_L"
+            | "Super_R"
+            | "Hyper_L"
+            | "Hyper_R"
+            | "ISO_Level3_Shift"
+            | "ISO_Level5_Shift"
+            | "Mode_switch"
+            | "Caps_Lock"
+            | "Shift_Lock"
+            | "Num_Lock"
+            | "Scroll_Lock"
+            | "Multi_key"
+    )
+}
+
+/// Monta o atalho a partir da tecla e dos modificadores segurados.
+pub fn hotkey_from_capture(mods: CaptureMods, key_name: &str) -> Result<Hotkey, ConfigError> {
+    let key_name = match key_name {
+        "ISO_Left_Tab" => "Tab",
+        other => other,
+    };
+    if key_name.is_empty() {
+        return Err(ConfigError("nenhuma tecla".into()));
+    }
+    if is_modifier_key(key_name) {
+        return Err(ConfigError(
+            "solte os modificadores e pressione a tecla do atalho".into(),
+        ));
+    }
+    let mut parts = Vec::new();
+    if mods.super_key {
+        parts.push("Super");
+    }
+    if mods.ctrl {
+        parts.push("Ctrl");
+    }
+    if mods.alt {
+        parts.push("Alt");
+    }
+    if mods.shift {
+        parts.push("Shift");
+    }
+    if mods.mod3 {
+        parts.push("Mod3");
+    }
+    if mods.mod5 {
+        parts.push("Mod5");
+    }
+    parts.push(key_name);
+    parse_hotkey(&parts.join("+"))
+}
+
+pub fn save_hotkey(path: &Path, hotkey: &Hotkey) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let quoted = hotkey.display.replace('\\', "\\\\").replace('"', "\\\"");
+    let body = format!(
+        "# Atalho global do flamenote.\n\
+         # Modificadores: Ctrl, Alt, Shift, Super.\n\
+         # Exemplos: \"Super+Shift+N\", \"Ctrl+Alt+N\", \"F9\"\n\
+         hotkey = \"{quoted}\"\n"
+    );
+    fs::write(path, body)
+}
+
 pub fn parse_hotkey(raw: &str) -> Result<Hotkey, ConfigError> {
     let mut modifiers = 0u16;
     let mut key: Option<String> = None;
@@ -185,16 +278,8 @@ fn read_path(path: &Path) -> Config {
 }
 
 fn write_default(path: &Path) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let body = format!(
-        "# Atalho global do flamenote.\n\
-         # Modificadores: Ctrl, Alt, Shift, Super.\n\
-         # Exemplos: \"Super+Shift+N\", \"Ctrl+Alt+N\", \"F9\"\n\
-         hotkey = \"{DEFAULT_HOTKEY}\"\n"
-    );
-    fs::write(path, body)
+    let hotkey = parse_hotkey(DEFAULT_HOTKEY).expect("atalho padrão");
+    save_hotkey(path, &hotkey)
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {
@@ -284,5 +369,49 @@ mod tests {
     #[test]
     fn rejects_two_keys() {
         assert!(parse_hotkey("Super+A+B").is_err());
+    }
+
+    #[test]
+    fn capture_builds_super_shift() {
+        let hotkey = hotkey_from_capture(
+            CaptureMods {
+                super_key: true,
+                shift: true,
+                ..CaptureMods::default()
+            },
+            "n",
+        )
+        .unwrap();
+        assert_eq!(hotkey.display, "Super+Shift+N");
+        assert_eq!(hotkey.key, "n");
+        assert_eq!(hotkey.modifiers, MOD4 | SHIFT);
+    }
+
+    #[test]
+    fn capture_maps_shift_tab_and_rejects_escape() {
+        let tab = hotkey_from_capture(
+            CaptureMods {
+                shift: true,
+                ..CaptureMods::default()
+            },
+            "ISO_Left_Tab",
+        )
+        .unwrap();
+        assert_eq!(tab.display, "Shift+Tab");
+        assert_eq!(tab.key, "Tab");
+        assert!(hotkey_from_capture(CaptureMods::default(), "Escape").is_err());
+        assert!(is_modifier_key("Super_L"));
+        assert!(!is_modifier_key("F9"));
+    }
+
+    #[test]
+    fn save_hotkey_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("flamenote-save-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let hotkey = parse_hotkey("Ctrl+Alt+N").unwrap();
+        save_hotkey(&path, &hotkey).unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.hotkey, hotkey);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

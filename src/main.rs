@@ -20,7 +20,9 @@ struct App {
     selection: Option<String>,
     notes: Rc<RefCell<Vec<gtk::Window>>>,
     note_seq: i32,
+    config_path: std::path::PathBuf,
     hotkey_display: String,
+    settings: Option<ui::Settings>,
     /// Mantém o processo vivo sem janelas. O guard libera o hold ao cair.
     _hold: gio::ApplicationHoldGuard,
     _lock: Option<std::fs::File>,
@@ -78,7 +80,9 @@ fn start(gtk_app: gtk::Application) -> Rc<RefCell<App>> {
         selection: None,
         notes: Rc::new(RefCell::new(Vec::new())),
         note_seq: 0,
+        config_path: cfg.path.clone(),
         hotkey_display: cfg.hotkey.display,
+        settings: None,
         _hold: hold,
         _lock: Some(lock),
     }));
@@ -104,7 +108,11 @@ fn on_event(app: &Rc<RefCell<App>>, event: AppEvent) {
         }
         AppEvent::TrayMenu { x, y } => popup_menu(app, x, y),
         AppEvent::HotkeyChanged(display) => {
-            app.borrow_mut().hotkey_display = display;
+            let mut this = app.borrow_mut();
+            this.hotkey_display = display.clone();
+            if let Some(settings) = &this.settings {
+                settings.set_display(&display);
+            }
         }
     }
 }
@@ -158,13 +166,9 @@ impl App {
 }
 
 fn popup_menu(app: &Rc<RefCell<App>>, x: i32, y: i32) {
-    let (to_x11, gtk_app, hotkey) = {
+    let (to_x11, gtk_app) = {
         let this = app.borrow();
-        (
-            this.to_x11.clone(),
-            this.gtk.clone(),
-            this.hotkey_display.clone(),
-        )
+        (this.to_x11.clone(), this.gtk.clone())
     };
 
     let menu = gtk::Menu::new();
@@ -172,14 +176,16 @@ fn popup_menu(app: &Rc<RefCell<App>>, x: i32, y: i32) {
     open.connect_activate(move |_| {
         let _ = to_x11.send(Command::Arm);
     });
-    let current = gtk::MenuItem::with_label(&format!("Atalho: {hotkey}"));
-    current.set_sensitive(false);
+    let app_settings = app.clone();
+    let settings = gtk::MenuItem::with_label("Configurações");
+    settings.connect_activate(move |_| open_settings(&app_settings));
     let quit = gtk::MenuItem::with_label("Sair");
     quit.connect_activate(move |_| {
         gtk_app.quit();
     });
     menu.append(&open);
-    menu.append(&current);
+    menu.append(&settings);
+    menu.append(&gtk::SeparatorMenuItem::new());
     menu.append(&quit);
     menu.show_all();
 
@@ -197,6 +203,48 @@ fn popup_menu(app: &Rc<RefCell<App>>, x: i32, y: i32) {
         gdk::Gravity::NorthWest,
         None::<&gdk::Event>,
     );
+}
+
+fn open_settings(app: &Rc<RefCell<App>>) {
+    if let Some(settings) = app.borrow().settings.as_ref() {
+        settings.present();
+        return;
+    }
+    let (path, display, to_x11, gtk_app) = {
+        let this = app.borrow();
+        (
+            this.config_path.clone(),
+            this.hotkey_display.clone(),
+            this.to_x11.clone(),
+            this.gtk.clone(),
+        )
+    };
+    let to_pause = to_x11.clone();
+    let on_listen = Rc::new(move |listen: bool| {
+        let command = if listen {
+            Command::PauseHotkey
+        } else {
+            Command::ResumeHotkey
+        };
+        let _ = to_pause.send(command);
+    });
+    let app_save = app.clone();
+    let on_save = Rc::new(move |hotkey: &config::Hotkey| {
+        config::save_hotkey(&path, hotkey).map_err(|err| format!("Não salvei o atalho: {err}"))?;
+        app_save.borrow_mut().hotkey_display = hotkey.display.clone();
+        let _ = to_x11.send(Command::ReloadConfig);
+        Ok(())
+    });
+    let settings = ui::build_settings(&display, on_listen, on_save);
+    let window = settings.window().clone();
+    gtk_app.add_window(&window);
+    app.borrow_mut().settings = Some(settings);
+    let app_closed = app.clone();
+    window.connect_destroy(move |_| {
+        app_closed.borrow_mut().settings = None;
+    });
+    window.show_all();
+    window.present();
 }
 
 fn instance_lock() -> std::fs::File {

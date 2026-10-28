@@ -40,6 +40,8 @@ hotkey = "Super+Shift+N"
 
 O atalho padrão é `Super+Shift+N`. Esc não pode ser o atalho. Durante a seleção, Esc só devolve o cursor. Com a caixa aberta, Esc fecha a caixa. Um atalho inválido volta para o padrão e a mensagem sai no terminal.
 
+O clique direito na bandeja abre “Configurações”. O campo do atalho, ao ser clicado, captura a próxima combinação. Ela é gravada na hora nesse arquivo e passa a valer em seguida.
+
 `FLAMENOTE_DEBUG=1` escreve no terminal o que a thread do X11 está fazendo.
 
 ## O que esta versão faz
@@ -49,7 +51,7 @@ O atalho padrão é `Super+Shift+N`. Esc não pode ser o atalho. Durante a sele�
 - Depois de um arrasto que seleciona texto, ou de uma seleção nova na janela em foco, a caixa aparece ao lado do fim da seleção. A ferramenta começa habilitada com esse texto. Ela fica desabilitada se a seleção sumir antes do clique. Espaço em branco conta como nada selecionado.
 - A ferramenta lê a seleção primária do X11 (PRIMARY). O dono dessa seleção precisa ser a janela em foco, um parente dela na árvore de janelas, outro cliente do mesmo processo (`_NET_WM_PID`) ou a mesma conexão X11. Isso pega a janela invisível em que o GTK e o Chromium guardam a seleção. Duas janelas do mesmo processo podem habilitar a ferramenta mesmo com a seleção na que não está em foco.
 - A caixa de ferramentas não rouba o foco. Clique fora dela não a fecha. Fecham: Esc, o atalho de novo, o clique esquerdo na bandeja, ou o uso da ferramenta.
-- O clique direito na bandeja mostra “Selecionar texto”, o atalho atual (só leitura) e “Sair”.
+- O clique direito na bandeja mostra “Selecionar texto”, “Configurações” e “Sair”.
 - O bilhete mostra o texto capturado, até 20 mil caracteres. Dá para arrastar. Um deslocamento menor que uns 3 pixels não conta como arrasto, para o clique duplo continuar fechando o bilhete.
 - A roda do mouse rola o texto quando ele não cabe.
 

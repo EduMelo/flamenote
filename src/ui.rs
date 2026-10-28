@@ -1,5 +1,6 @@
-//! Caixa de ferramentas e bilhetes flutuantes.
+//! Caixa de ferramentas, bilhetes flutuantes e a janela de configuração.
 
+use crate::config::{self, CaptureMods, Hotkey};
 use gdk::EventMask;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -32,6 +33,39 @@ pub fn install_style() {
             color: #1e1e2e;
             font-family: Inter, "DejaVu Sans", sans-serif;
             font-size: 14px;
+        }
+        window.flamenote-settings,
+        window.flamenote-settings box {
+            background-color: #f7f5f8;
+        }
+        window.flamenote-settings label.title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        window.flamenote-settings label.section {
+            color: #6c7086;
+            font-size: 13px;
+        }
+        window.flamenote-settings entry.capture {
+            background-image: none;
+            background-color: #ffffff;
+            color: #1e1e2e;
+            border: 1px solid #d5d3dc;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 15px;
+            caret-color: transparent;
+        }
+        window.flamenote-settings entry.capture.listening {
+            border-color: #fab387;
+            background-color: #fff8f3;
+        }
+        window.flamenote-settings label.hint {
+            color: #6c7086;
+            font-size: 12px;
+        }
+        window.flamenote-settings label.hint.error {
+            color: #c45c4a;
         }
     "#;
     if provider.load_from_data(css).is_err() {
@@ -566,6 +600,299 @@ fn monitor_at(x: i32, y: i32) -> (i32, i32, i32, i32) {
     };
     let g = monitor.geometry();
     (g.x(), g.y(), g.width(), g.height())
+}
+
+const HINT_IDLE: &str = "Clique no campo e pressione as teclas.";
+const HINT_LISTEN: &str = "Pressione o atalho. Esc cancela.";
+const HINT_SAVED: &str = "Atalho salvo.";
+
+pub struct Settings {
+    window: gtk::Window,
+    field: gtk::Entry,
+    listening: Rc<Cell<bool>>,
+    saved: Rc<RefCell<String>>,
+}
+
+impl Settings {
+    pub fn present(&self) {
+        self.window.show_all();
+        self.window.present();
+    }
+
+    pub fn window(&self) -> &gtk::Window {
+        &self.window
+    }
+
+    pub fn set_display(&self, display: &str) {
+        *self.saved.borrow_mut() = display.to_string();
+        if !self.listening.get() {
+            self.field.set_text(display);
+            self.field.select_region(0, 0);
+        }
+    }
+}
+
+pub fn build_settings(
+    initial: &str,
+    on_listen: Rc<dyn Fn(bool)>,
+    on_save: Rc<dyn Fn(&Hotkey) -> Result<(), String>>,
+) -> Settings {
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
+    window.set_title("Configurações");
+    window.set_resizable(false);
+    window.set_position(gtk::WindowPosition::Center);
+    window.set_type_hint(gdk::WindowTypeHint::Dialog);
+    window.set_accept_focus(true);
+    window.set_focus_on_map(true);
+    window.style_context().add_class("flamenote-settings");
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_margin_top(20);
+    content.set_margin_bottom(20);
+    content.set_margin_start(20);
+    content.set_margin_end(20);
+    content.set_size_request(340, -1);
+
+    let title = gtk::Label::new(Some("Configurações"));
+    title.set_xalign(0.0);
+    title.style_context().add_class("title");
+
+    let section = gtk::Label::new(Some("Atalho"));
+    section.set_xalign(0.0);
+    section.set_margin_top(8);
+    section.style_context().add_class("section");
+
+    let field = gtk::Entry::new();
+    field.set_text(initial);
+    field.set_editable(false);
+    field.set_can_focus(true);
+    field.set_has_frame(false);
+    field.set_width_chars(22);
+    field.set_placeholder_text(Some("Pressione as teclas…"));
+    field.set_tooltip_text(Some("Clique e pressione o novo atalho"));
+    field.style_context().add_class("capture");
+
+    let hint = gtk::Label::new(Some(HINT_IDLE));
+    hint.set_xalign(0.0);
+    hint.set_line_wrap(true);
+    hint.set_max_width_chars(42);
+    hint.style_context().add_class("hint");
+
+    content.add(&title);
+    content.add(&section);
+    content.add(&field);
+    content.add(&hint);
+    window.add(&content);
+
+    let listening = Rc::new(Cell::new(false));
+    let saved = Rc::new(RefCell::new(initial.to_string()));
+
+    let listening_click = listening.clone();
+    let field_click = field.clone();
+    let hint_click = hint.clone();
+    let on_listen_click = on_listen.clone();
+    field.connect_button_press_event(move |_, event| {
+        if event.button() != 1 {
+            return glib::Propagation::Proceed;
+        }
+        if !listening_click.get() {
+            listening_click.set(true);
+            field_click.set_text("");
+            field_click.style_context().add_class("listening");
+            set_hint(&hint_click, HINT_LISTEN, false);
+            on_listen_click(true);
+        }
+        field_click.grab_focus();
+        glib::Propagation::Proceed
+    });
+
+    let cancel = {
+        let listening = listening.clone();
+        let saved = saved.clone();
+        let field = field.clone();
+        let hint = hint.clone();
+        let on_listen = on_listen.clone();
+        Rc::new(move || {
+            if !listening.get() {
+                return;
+            }
+            listening.set(false);
+            field.set_text(&saved.borrow());
+            field.select_region(0, 0);
+            field.style_context().remove_class("listening");
+            set_hint(&hint, HINT_IDLE, false);
+            on_listen(false);
+        }) as Rc<dyn Fn()>
+    };
+
+    let listening_key = listening.clone();
+    let saved_key = saved.clone();
+    let field_key = field.clone();
+    let hint_key = hint.clone();
+    let cancel_key = cancel.clone();
+    field.connect_key_press_event(move |_, event| {
+        if !listening_key.get() {
+            return glib::Propagation::Proceed;
+        }
+        let key = event.keyval();
+        let Some(name) = key.name() else {
+            return glib::Propagation::Stop;
+        };
+        let name = name.to_string();
+        if event.is_modifier() || config::is_modifier_key(&name) {
+            return glib::Propagation::Stop;
+        }
+        if name == "Escape" {
+            cancel_key();
+            return glib::Propagation::Stop;
+        }
+        let state = event.state();
+        let mods = CaptureMods {
+            super_key: state.contains(gdk::ModifierType::SUPER_MASK)
+                || state.contains(gdk::ModifierType::MOD4_MASK)
+                || state.contains(gdk::ModifierType::META_MASK),
+            ctrl: state.contains(gdk::ModifierType::CONTROL_MASK),
+            alt: state.contains(gdk::ModifierType::MOD1_MASK),
+            shift: state.contains(gdk::ModifierType::SHIFT_MASK),
+            mod3: state.contains(gdk::ModifierType::MOD3_MASK),
+            mod5: state.contains(gdk::ModifierType::MOD5_MASK),
+        };
+        match config::hotkey_from_capture(mods, &name) {
+            Ok(hotkey) => match on_save(&hotkey) {
+                Ok(()) => {
+                    listening_key.set(false);
+                    *saved_key.borrow_mut() = hotkey.display.clone();
+                    field_key.set_text(&hotkey.display);
+                    field_key.select_region(0, 0);
+                    field_key.style_context().remove_class("listening");
+                    set_hint(&hint_key, HINT_SAVED, false);
+                }
+                Err(message) => set_hint(&hint_key, &message, true),
+            },
+            Err(err) => set_hint(&hint_key, &err.0, true),
+        }
+        glib::Propagation::Stop
+    });
+
+    let cancel_focus = cancel.clone();
+    let field_focus = field.clone();
+    field.connect_focus_out_event(move |_, _| {
+        let cancel = cancel_focus.clone();
+        let field = field_focus.clone();
+        glib::idle_add_local(move || {
+            if !field.has_focus() {
+                cancel();
+            }
+            glib::ControlFlow::Break
+        });
+        glib::Propagation::Proceed
+    });
+
+    let listening_destroy = listening.clone();
+    window.connect_destroy(move |_| {
+        if listening_destroy.get() {
+            listening_destroy.set(false);
+            on_listen(false);
+        }
+    });
+
+    Settings {
+        window,
+        field,
+        listening,
+        saved,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glib::translate::ToGlibPtr;
+
+    #[test]
+    fn settings_window_captures_a_chord() {
+        if std::env::var_os("DISPLAY").is_none() {
+            return;
+        }
+        gtk::init().expect("gtk");
+        install_style();
+        let saved = Rc::new(RefCell::new(String::new()));
+        let saved_cb = saved.clone();
+        let settings = build_settings(
+            "Super+Shift+N",
+            Rc::new(|_| {}),
+            Rc::new(move |hotkey| {
+                *saved_cb.borrow_mut() = hotkey.display.clone();
+                Ok(())
+            }),
+        );
+        assert_eq!(settings.field.text(), "Super+Shift+N");
+        let window = settings.window.clone();
+        window.show_all();
+        let ctx = glib::MainContext::default();
+        for _ in 0..30 {
+            let _ = ctx.iteration(false);
+        }
+        let field = settings.field.clone();
+        field.grab_focus();
+        send_button(&field);
+        for _ in 0..5 {
+            let _ = ctx.iteration(false);
+        }
+        send_key(
+            &field,
+            "n",
+            gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::MOD1_MASK,
+        );
+        for _ in 0..5 {
+            let _ = ctx.iteration(false);
+        }
+        assert_eq!(saved.borrow().as_str(), "Ctrl+Alt+N");
+        assert_eq!(settings.field.text(), "Ctrl+Alt+N");
+        window.close();
+        for _ in 0..5 {
+            let _ = ctx.iteration(false);
+        }
+    }
+
+    fn send_button(field: &gtk::Entry) {
+        let event = gdk::Event::new(gdk::EventType::ButtonPress);
+        unsafe {
+            let raw: *mut gdk::ffi::GdkEvent = event.to_glib_none().0;
+            let ptr = raw as *mut gdk::ffi::GdkEventButton;
+            (*ptr).button = 1;
+            (*ptr).send_event = 1;
+            if let Some(win) = field.window() {
+                (*ptr).window = win.to_glib_none().0;
+            }
+        }
+        field.event(&event);
+    }
+
+    fn send_key(field: &gtk::Entry, name: &str, state: gdk::ModifierType) {
+        let event = gdk::Event::new(gdk::EventType::KeyPress);
+        unsafe {
+            let raw: *mut gdk::ffi::GdkEvent = event.to_glib_none().0;
+            let ptr = raw as *mut gdk::ffi::GdkEventKey;
+            (*ptr).keyval = *gdk::keys::Key::from_name(name);
+            (*ptr).state = state.bits();
+            (*ptr).length = 1;
+            (*ptr).send_event = 1;
+            if let Some(win) = field.window() {
+                (*ptr).window = win.to_glib_none().0;
+            }
+        }
+        field.event(&event);
+    }
+}
+
+fn set_hint(hint: &gtk::Label, text: &str, error: bool) {
+    hint.set_text(text);
+    if error {
+        hint.style_context().add_class("error");
+    } else {
+        hint.style_context().remove_class("error");
+    }
 }
 
 fn clamp(value: i32, min: i32, max: i32) -> i32 {
