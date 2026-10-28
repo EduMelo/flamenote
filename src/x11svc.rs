@@ -7,7 +7,7 @@
 //!
 //! O modo de seleção não usa XGrabPointer: esse grab ficaria com os cliques e
 //! a outra janela não receberia o arrasto. O cursor do servidor é escondido
-//! (XFixes) e uma cruz sem área de entrada segue o ponteiro.
+//! (XFixes) e uma cruz preta de borda branca, sem área de entrada, segue o ponteiro.
 
 use crate::config::{self, Config, Hotkey};
 use std::collections::HashSet;
@@ -18,7 +18,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, BackingStore, ClientMessageData, ClientMessageEvent, ConfigureNotifyEvent,
+    Atom, AtomEnum, ClientMessageData, ClientMessageEvent, ConfigureNotifyEvent,
     ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask,
     GetPropertyReply, ImageFormat, ImageOrder, KeyPressEvent, ModMask, PropMode, Property,
     Rectangle, StackMode, Window, WindowClass, CLIENT_MESSAGE_EVENT,
@@ -639,6 +639,9 @@ impl X11 {
             self.crosshair,
             &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE),
         )?;
+        self.conn
+            .clear_area(false, self.crosshair, 0, 0, 0, 0)?
+            .check()?;
         if !self.cursor_hidden {
             self.conn.xfixes_hide_cursor(self.root)?.check()?;
             self.cursor_hidden = true;
@@ -668,6 +671,28 @@ impl X11 {
             return Err("profundidade do X11 sem 32 bits por pixel; não desenhei a cruz".into());
         }
         let id = self.conn.generate_id()?;
+        // Fundo da janela, não um put_image antes do mapa. No mapa o servidor
+        // pinta o background; com pixel 0 a cruz ficava só preta e a borda
+        // branca sumia. O pixmap permanece: é a referência do fundo.
+        let pixmap = self.conn.generate_id()?;
+        self.conn
+            .create_pixmap(self.depth, pixmap, self.root, CROSS, CROSS)?
+            .check()?;
+        let data = render_crosshair(self.lsb);
+        self.conn
+            .put_image(
+                ImageFormat::Z_PIXMAP,
+                pixmap,
+                self.gc,
+                CROSS,
+                CROSS,
+                0,
+                0,
+                0,
+                self.depth,
+                &data,
+            )?
+            .check()?;
         self.conn.create_window(
             self.depth,
             id,
@@ -681,8 +706,7 @@ impl X11 {
             self.visual,
             &CreateWindowAux::new()
                 .override_redirect(1u32)
-                .backing_store(BackingStore::WHEN_MAPPED)
-                .background_pixel(0)
+                .background_pixmap(pixmap)
                 .event_mask(EventMask::NO_EVENT),
         )?;
         self.conn.change_property8(
@@ -691,19 +715,6 @@ impl X11 {
             AtomEnum::WM_NAME,
             AtomEnum::STRING,
             b"flamenote-cursor",
-        )?;
-        let data = render_crosshair(self.lsb);
-        self.conn.put_image(
-            ImageFormat::Z_PIXMAP,
-            id,
-            self.gc,
-            CROSS,
-            CROSS,
-            0,
-            0,
-            0,
-            self.depth,
-            &data,
         )?;
         let mid = (CROSS / 2) as i16;
         let bars = [
@@ -1408,22 +1419,32 @@ fn intern(conn: &RustConnection, name: &str) -> XResult<Atom> {
     Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
 }
 
+/// Cruz de 3 px: traço preto de 1 px com borda branca de 1 px.
+/// O branco fecha as pontas e o vão central, para o preto não encostar
+/// no que estiver atrás. O miolo 3×3 fica vazio.
 fn render_crosshair(lsb: bool) -> Vec<u8> {
     let n = CROSS as i32;
     let mid = n / 2;
     let mut data = vec![0u8; (n * n * 4) as usize];
     for y in 0..n {
         for x in 0..n {
-            let vertical = (x - mid).abs() <= 1;
-            let horizontal = (y - mid).abs() <= 1;
-            if !vertical && !horizontal {
+            let on_bar = (x - mid).abs() <= 1 || (y - mid).abs() <= 1;
+            let in_hole = (x - mid).abs() <= 1 && (y - mid).abs() <= 1;
+            if !on_bar || in_hole {
                 continue;
             }
-            if vertical && horizontal {
-                continue;
-            }
-            let core = x == mid || y == mid;
-            let rgb = if core { (0, 0, 0) } else { (255, 255, 255) };
+            let spine = x == mid || y == mid;
+            let cap = x == 0
+                || y == 0
+                || x == n - 1
+                || y == n - 1
+                || (x - mid).abs() == 2
+                || (y - mid).abs() == 2;
+            let rgb = if spine && !cap {
+                (0, 0, 0)
+            } else {
+                (255, 255, 255)
+            };
             write_pixel(&mut data, n, x, y, rgb, lsb);
         }
     }
@@ -1503,6 +1524,64 @@ fn write_pixel(data: &mut [u8], width: i32, x: i32, y: i32, rgb: (u8, u8, u8), l
 fn debug(msg: &str) {
     if std::env::var_os("FLAMENOTE_DEBUG").is_some() {
         eprintln!("flamenote: {msg}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgba(data: &[u8], x: i32, y: i32, lsb: bool) -> [u8; 4] {
+        let n = CROSS as i32;
+        let i = ((y * n + x) * 4) as usize;
+        let b = &data[i..i + 4];
+        if lsb {
+            [b[2], b[1], b[0], b[3]]
+        } else {
+            [b[1], b[2], b[3], b[0]]
+        }
+    }
+
+    #[test]
+    fn crosshair_black_stroke_is_enclosed_by_white() {
+        for lsb in [false, true] {
+            let data = render_crosshair(lsb);
+            let n = CROSS as i32;
+            let mid = n / 2;
+            let mut black = 0;
+            let mut white = 0;
+            for y in 0..n {
+                for x in 0..n {
+                    let px = rgba(&data, x, y, lsb);
+                    let on_bar = (x - mid).abs() <= 1 || (y - mid).abs() <= 1;
+                    let in_hole = (x - mid).abs() <= 1 && (y - mid).abs() <= 1;
+                    if !on_bar || in_hole {
+                        assert_eq!(px, [0, 0, 0, 0], "fora da cruz em {x},{y}");
+                        continue;
+                    }
+                    if px == [0, 0, 0, 255] {
+                        black += 1;
+                        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                            let nx = x + dx;
+                            let ny = y + dy;
+                            assert!(
+                                (0..n).contains(&nx) && (0..n).contains(&ny),
+                                "traço preto na borda da janela em {x},{y}"
+                            );
+                            let neighbor = rgba(&data, nx, ny, lsb);
+                            assert!(
+                                neighbor == [255, 255, 255, 255] || neighbor == [0, 0, 0, 255],
+                                "preto em {x},{y} encosta em {neighbor:?} em {nx},{ny}"
+                            );
+                        }
+                    } else {
+                        assert_eq!(px, [255, 255, 255, 255], "pixel da cruz em {x},{y}");
+                        white += 1;
+                    }
+                }
+            }
+            assert!(black > 0 && white > black, "preto {black}, branco {white}");
+        }
     }
 }
 
