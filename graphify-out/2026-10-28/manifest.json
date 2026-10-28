@@ -1,0 +1,44 @@
+{
+  ".github/workflows/publish-aur.yml": {
+    "mtime": 1793135369.4608989,
+    "seen": 1793181982.8650634,
+    "ast_hash": "c0c851f5351989640afcb68ee8f66820",
+    "semantic_hash": "c0c851f5351989640afcb68ee8f66820"
+  },
+  "Cargo.toml": {
+    "mtime": 1793129425.7367759,
+    "seen": 1793181982.86507,
+    "ast_hash": "1f2d5796744a4ebed722f53f652997d7",
+    "semantic_hash": "1f2d5796744a4ebed722f53f652997d7"
+  },
+  "src/config.rs": {
+    "mtime": 1793129425.7367759,
+    "seen": 1793181982.8650734,
+    "ast_hash": "e83ba3948482e43756fe86b0a9b9ca35",
+    "semantic_hash": "e83ba3948482e43756fe86b0a9b9ca35"
+  },
+  "src/main.rs": {
+    "mtime": 1793129425.7380333,
+    "seen": 1793181982.865075,
+    "ast_hash": "a6f2d64c0d4869b807b3713b55431970",
+    "semantic_hash": "a6f2d64c0d4869b807b3713b55431970"
+  },
+  "src/ui.rs": {
+    "mtime": 1793129425.7380333,
+    "seen": 1793181982.865077,
+    "ast_hash": "1814fac79da5c434f79858900df7567f",
+    "semantic_hash": "1814fac79da5c434f79858900df7567f"
+  },
+  "src/x11svc.rs": {
+    "mtime": 1793129425.7380333,
+    "seen": 1793181982.8650787,
+    "ast_hash": "0c565343c42f3241ddc87510ab80fd90",
+    "semantic_hash": "0c565343c42f3241ddc87510ab80fd90"
+  },
+  "README.md": {
+    "mtime": 1793129425.7367759,
+    "seen": 1793181982.8650804,
+    "ast_hash": "7269c5dde95d0a71570ea314fcbf1411",
+    "semantic_hash": "7269c5dde95d0a71570ea314fcbf1411"
+  }
+}

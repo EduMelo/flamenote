@@ -1,0 +1,4 @@
+[mcp_servers.graphify]
+command = "/home/hsdracones/.local/bin/graphify-mcp"
+args = ["/home/hsdracones/dev/hsd-playbooks/graphify-out/graph.json"]
+enabled = true

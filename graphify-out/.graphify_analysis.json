@@ -1,0 +1,481 @@
+{
+  "communities": {
+    "0": [
+      "configurenotifyevent",
+      "event",
+      "keypressevent",
+      "src_x11svc_chord_matches",
+      "src_x11svc_debug",
+      "src_x11svc_keysyms_for_name",
+      "src_x11svc_modifier_variants",
+      "src_x11svc_plain_escape",
+      "src_x11svc_run",
+      "src_x11svc_x11",
+      "src_x11svc_x11_absorb_armed_sample",
+      "src_x11svc_x11_active_window",
+      "src_x11svc_x11_arm",
+      "src_x11svc_x11_armed_without_owner",
+      "src_x11svc_x11_classify_sample",
+      "src_x11svc_x11_close_toolbox",
+      "src_x11svc_x11_disarm",
+      "src_x11svc_x11_dock",
+      "src_x11svc_x11_drain_commands",
+      "src_x11svc_x11_drop",
+      "src_x11svc_x11_ensure_crosshair",
+      "src_x11svc_x11_finish_selection",
+      "src_x11svc_x11_grab_escape",
+      "src_x11svc_x11_grab_hotkey",
+      "src_x11svc_x11_handle_event",
+      "src_x11svc_x11_hide_crosshair",
+      "src_x11svc_x11_maybe_begin_selection",
+      "src_x11svc_x11_maybe_reload_config",
+      "src_x11svc_x11_maybe_retry_dock",
+      "src_x11svc_x11_maybe_timeout_selection",
+      "src_x11svc_x11_move_crosshair",
+      "src_x11svc_x11_on_incr_chunk",
+      "src_x11svc_x11_on_key_press",
+      "src_x11svc_x11_on_selection_notify",
+      "src_x11svc_x11_pointer_state",
+      "src_x11svc_x11_publish_selection",
+      "src_x11svc_x11_request_selection",
+      "src_x11svc_x11_reset_gesture",
+      "src_x11svc_x11_resize_icon",
+      "src_x11svc_x11_resolve_keycodes",
+      "src_x11svc_x11_reveal",
+      "src_x11svc_x11_shape_input_empty",
+      "src_x11svc_x11_show_crosshair",
+      "src_x11svc_x11_toggle",
+      "src_x11svc_x11_track_crosshair",
+      "src_x11svc_x11_ungrab_codes",
+      "src_x11svc_x11_ungrab_escape",
+      "src_x11svc_xresult"
+    ],
+    "1": [
+      "atomenum",
+      "backingstore",
+      "client_message_event",
+      "clientmessagedata",
+      "clientmessageevent",
+      "configurewindowaux",
+      "connection",
+      "connectionext_as",
+      "creategcaux",
+      "createwindowaux",
+      "duration",
+      "hashset",
+      "imageformat",
+      "imageorder",
+      "instant",
+      "keysym_case_insensitive",
+      "keysym_from_name",
+      "keysym_no_flags",
+      "modmask",
+      "mpsc",
+      "property",
+      "propmode",
+      "rectangle",
+      "sk",
+      "so",
+      "src_x11svc",
+      "src_x11svc_arm_query",
+      "src_x11svc_button1",
+      "src_x11svc_config_poll",
+      "src_x11svc_cross",
+      "src_x11svc_cross_hot",
+      "src_x11svc_dock_retry",
+      "src_x11svc_empty_release_tries",
+      "src_x11svc_icon_px",
+      "src_x11svc_lock",
+      "src_x11svc_meaningful",
+      "src_x11svc_mod2",
+      "src_x11svc_mod5",
+      "src_x11svc_query_every",
+      "src_x11svc_sel_timeout",
+      "src_x11svc_system_tray_request_dock",
+      "src_x11svc_xembed_embedded_notify",
+      "src_x11svc_xembed_mapped",
+      "stackmode",
+      "tryrecverror",
+      "windowclass"
+    ],
+    "2": [
+      "github_workflows_publish_aur",
+      "github_workflows_publish_aur_build_container",
+      "github_workflows_publish_aur_build_name",
+      "github_workflows_publish_aur_build_runs_on",
+      "github_workflows_publish_aur_build_steps",
+      "github_workflows_publish_aur_env_aur_ssh_private_key",
+      "github_workflows_publish_aur_env_repository_token",
+      "github_workflows_publish_aur_jobs",
+      "github_workflows_publish_aur_jobs_build",
+      "github_workflows_publish_aur_jobs_publish_aur",
+      "github_workflows_publish_aur_jobs_publish_github_packages",
+      "github_workflows_publish_aur_name",
+      "github_workflows_publish_aur_on",
+      "github_workflows_publish_aur_on_push",
+      "github_workflows_publish_aur_on_workflow_dispatch",
+      "github_workflows_publish_aur_permissions",
+      "github_workflows_publish_aur_permissions_contents",
+      "github_workflows_publish_aur_permissions_packages",
+      "github_workflows_publish_aur_publish_aur_container",
+      "github_workflows_publish_aur_publish_aur_name",
+      "github_workflows_publish_aur_publish_aur_needs",
+      "github_workflows_publish_aur_publish_aur_runs_on",
+      "github_workflows_publish_aur_publish_aur_steps",
+      "github_workflows_publish_aur_publish_github_packages_name",
+      "github_workflows_publish_aur_publish_github_packages_needs",
+      "github_workflows_publish_aur_publish_github_packages_runs_on",
+      "github_workflows_publish_aur_publish_github_packages_steps",
+      "github_workflows_publish_aur_push_tags",
+      "github_workflows_publish_aur_steps_env",
+      "github_workflows_publish_aur_steps_id",
+      "github_workflows_publish_aur_steps_if",
+      "github_workflows_publish_aur_steps_name",
+      "github_workflows_publish_aur_steps_run",
+      "github_workflows_publish_aur_steps_uses",
+      "github_workflows_publish_aur_steps_with",
+      "github_workflows_publish_aur_with_if_no_files_found",
+      "github_workflows_publish_aur_with_include_hidden_files",
+      "github_workflows_publish_aur_with_name",
+      "github_workflows_publish_aur_with_path",
+      "github_workflows_publish_aur_with_token"
+    ],
+    "3": [
+      "cell",
+      "context",
+      "eventbox",
+      "eventmask",
+      "region",
+      "src_ui",
+      "src_ui_apply_rounded_shape",
+      "src_ui_build_toolbox",
+      "src_ui_button_rect",
+      "src_ui_card_pad",
+      "src_ui_clamp",
+      "src_ui_drag",
+      "src_ui_install_style",
+      "src_ui_monitor_at",
+      "src_ui_paint_note",
+      "src_ui_paint_tool_icon",
+      "src_ui_paint_toolbox",
+      "src_ui_place_near",
+      "src_ui_place_note",
+      "src_ui_point_in_button",
+      "src_ui_pointer",
+      "src_ui_prepare_floating",
+      "src_ui_punch_transparency",
+      "src_ui_rounded",
+      "src_ui_rounded_inset",
+      "src_ui_rounded_region",
+      "src_ui_rs_window",
+      "src_ui_select_pointer_events",
+      "src_ui_shadow",
+      "src_ui_spawn_note",
+      "src_ui_toolbox",
+      "src_ui_toolbox_16406c",
+      "src_ui_toolbox_hide",
+      "src_ui_toolbox_set_enabled",
+      "src_ui_toolbox_show_near",
+      "src_ui_truncate_note",
+      "src_ui_use_rgba",
+      "widgetext"
+    ],
+    "4": [
+      "deserialize",
+      "formatter",
+      "fs",
+      "path",
+      "pathbuf",
+      "src_config",
+      "src_config_config",
+      "src_config_config_path",
+      "src_config_configerror",
+      "src_config_configerror_fmt",
+      "src_config_control",
+      "src_config_default_hotkey",
+      "src_config_display_key",
+      "src_config_fileconfig",
+      "src_config_home_dir",
+      "src_config_hotkey",
+      "src_config_load",
+      "src_config_mod1",
+      "src_config_mod3",
+      "src_config_mod4",
+      "src_config_mod5",
+      "src_config_modifiers_can_come_in_any_order",
+      "src_config_mtime",
+      "src_config_normalize_key_name",
+      "src_config_parse_hotkey",
+      "src_config_parses_default_hotkey",
+      "src_config_parses_function_key_without_modifiers",
+      "src_config_read_path",
+      "src_config_rejects_escape_as_hotkey",
+      "src_config_rejects_two_keys",
+      "src_config_reload_if_changed",
+      "src_config_shift",
+      "src_config_write_default",
+      "super",
+      "systemtime"
+    ],
+    "5": [
+      "application",
+      "applicationholdguard",
+      "asrawfd",
+      "file",
+      "prelude",
+      "rc",
+      "receiver",
+      "refcell",
+      "src_main",
+      "src_main_app",
+      "src_main_app_hide_toolbox",
+      "src_main_capture",
+      "src_main_instance_lock",
+      "src_main_main",
+      "src_main_on_event",
+      "src_main_popup_menu",
+      "src_main_rs_sender",
+      "src_main_rs_window",
+      "src_main_show_toolbox",
+      "src_main_start",
+      "src_x11svc_appevent",
+      "src_x11svc_appevent_hidetoolbox",
+      "src_x11svc_appevent_hotkeychanged",
+      "src_x11svc_appevent_selection",
+      "src_x11svc_appevent_showtoolbox",
+      "src_x11svc_appevent_traymenu",
+      "src_x11svc_command",
+      "src_x11svc_command_arm",
+      "src_x11svc_command_closetoolbox",
+      "src_x11svc_command_shutdown",
+      "src_x11svc_rs_sender",
+      "src_x11svc_spawn",
+      "src_x11svc_x11_open"
+    ],
+    "6": [
+      "readme_compositor",
+      "readme_config_toml",
+      "readme_flamenote",
+      "readme_flameshot",
+      "readme_gtk3",
+      "readme_hotkey",
+      "readme_instance_lock",
+      "readme_note_card",
+      "readme_primary_selection",
+      "readme_selection_mode",
+      "readme_systray_xembed",
+      "readme_toolbox",
+      "readme_x11"
+    ],
+    "7": [
+      "atom",
+      "rustconnection",
+      "src_x11svc_atoms",
+      "src_x11svc_intern",
+      "src_x11svc_is_ancestor",
+      "src_x11svc_rs_window",
+      "src_x11svc_same_x_client",
+      "src_x11svc_selection_belongs_to_focus",
+      "src_x11svc_window_pid",
+      "src_x11svc_windows_related"
+    ],
+    "8": [
+      "src_x11svc_intokeybits",
+      "src_x11svc_intokeybits_into_key_bits",
+      "src_x11svc_key_state_bits",
+      "src_x11svc_u16",
+      "src_x11svc_u16_into_key_bits",
+      "src_x11svc_x11rb_protocol_xproto_keybutmask",
+      "src_x11svc_x11rb_protocol_xproto_keybutmask_into_key_bits"
+    ],
+    "9": [
+      "src_x11svc_in_round",
+      "src_x11svc_render_crosshair",
+      "src_x11svc_render_icon",
+      "src_x11svc_write_pixel",
+      "src_x11svc_x11_redraw"
+    ],
+    "10": [
+      "src_x11svc_samplekind",
+      "src_x11svc_samplekind_afterrelease",
+      "src_x11svc_samplekind_baseline",
+      "src_x11svc_samplekind_normal",
+      "src_x11svc_samplekind_stale"
+    ],
+    "11": [
+      "src_x11svc_selstate",
+      "src_x11svc_selstate_awaitincr",
+      "src_x11svc_selstate_awaitnotify",
+      "src_x11svc_selstate_idle"
+    ],
+    "12": [
+      "getpropertyreply",
+      "src_x11svc_decode_property"
+    ],
+    "13": [
+      "pkg_flamenote"
+    ]
+  },
+  "cohesion": {
+    "0": 0.12854609929078015,
+    "1": 0.043478260869565216,
+    "2": 0.06153846153846154,
+    "3": 0.10953058321479374,
+    "4": 0.08907563025210084,
+    "5": 0.09848484848484848,
+    "6": 0.23076923076923078,
+    "7": 0.4,
+    "8": 0.3333333333333333,
+    "9": 0.4,
+    "10": 0.4,
+    "11": 0.5,
+    "12": 1.0,
+    "13": 1.0
+  },
+  "gods": [
+    {
+      "id": "src_x11svc_x11",
+      "label": "X11",
+      "degree": 51
+    },
+    {
+      "id": "src_x11svc_xresult",
+      "label": "XResult",
+      "degree": 40
+    },
+    {
+      "id": "src_x11svc_run",
+      "label": "run()",
+      "degree": 17
+    },
+    {
+      "id": "src_main_app",
+      "label": "App",
+      "degree": 14
+    },
+    {
+      "id": "src_x11svc_appevent",
+      "label": "AppEvent",
+      "degree": 12
+    },
+    {
+      "id": "src_config_config",
+      "label": "Config",
+      "degree": 10
+    },
+    {
+      "id": "src_x11svc_command",
+      "label": "Command",
+      "degree": 10
+    },
+    {
+      "id": "src_ui_spawn_note",
+      "label": "spawn_note()",
+      "degree": 9
+    },
+    {
+      "id": "src_config_parse_hotkey",
+      "label": "parse_hotkey()",
+      "degree": 9
+    },
+    {
+      "id": "src_x11svc_selection_belongs_to_focus",
+      "label": "selection_belongs_to_focus()",
+      "degree": 9
+    }
+  ],
+  "surprises": [
+    {
+      "source": "App",
+      "target": "Toolbox",
+      "source_files": [
+        "src/main.rs",
+        "src/ui.rs"
+      ],
+      "confidence": "INFERRED",
+      "relation": "references",
+      "why": "inferred connection - not explicitly stated in source; bridges separate communities"
+    },
+    {
+      "source": "X11",
+      "target": "Config",
+      "source_files": [
+        "src/x11svc.rs",
+        "src/config.rs"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "references",
+      "why": "bridges separate communities"
+    },
+    {
+      "source": "X11",
+      "target": "Hotkey",
+      "source_files": [
+        "src/x11svc.rs",
+        "src/config.rs"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "references",
+      "why": "bridges separate communities"
+    },
+    {
+      "source": "run()",
+      "target": "Config",
+      "source_files": [
+        "src/x11svc.rs",
+        "src/config.rs"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "references",
+      "why": "bridges separate communities"
+    },
+    {
+      "source": "spawn()",
+      "target": "Config",
+      "source_files": [
+        "src/x11svc.rs",
+        "src/config.rs"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "references",
+      "why": "bridges separate communities"
+    }
+  ],
+  "questions": [
+    {
+      "type": "bridge_node",
+      "question": "Why does `X11` connect `X11 Event Handling` to `X11 Window Setup`, `Config and Hotkeys`, `Application Event Loop`, `X11 Window Relations`, `Crosshair Icon Rendering`, `Sample State Types`, `Selection State Machine`?",
+      "why": "High betweenness centrality (0.140) - this node is a cross-community bridge."
+    },
+    {
+      "type": "isolated_nodes",
+      "question": "What connects `AfterRelease`, `Baseline`, `Normal` to the rest of the system?",
+      "why": "15 weakly-connected nodes found - possible documentation gaps or missing edges."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `X11 Event Handling` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.12854609929078015 - nodes in this community are weakly interconnected."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `Config` connect `Config and Hotkeys` to `X11 Event Handling`, `X11 Window Setup`, `Application Event Loop`?",
+      "why": "High betweenness centrality (0.089) - this node is a cross-community bridge."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `X11 Window Setup` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.043478260869565216 - nodes in this community are weakly interconnected."
+    },
+    {
+      "type": "bridge_node",
+      "question": "Why does `Command` connect `Application Event Loop` to `X11 Event Handling`, `X11 Window Setup`?",
+      "why": "High betweenness centrality (0.077) - this node is a cross-community bridge."
+    },
+    {
+      "type": "low_cohesion",
+      "question": "Should `GitHub Actions Publishing` be split into smaller, more focused modules?",
+      "why": "Cohesion score 0.06153846153846154 - nodes in this community are weakly interconnected."
+    }
+  ]
+}
