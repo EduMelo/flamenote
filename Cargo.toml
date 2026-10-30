@@ -15,7 +15,6 @@ gio = "0.18"
 glib = "0.18"
 gtk = "0.18"
 libc = "0.2"
-pango = "0.18"
 x11rb = { version = "0.13", features = ["xfixes"] }
 xkbcommon = "0.9"
 serde = { version = "1", features = ["derive"] }

@@ -9,7 +9,7 @@
 //! a outra janela não receberia o arrasto. O cursor do servidor é escondido
 //! (XFixes) e uma cruz preta de borda branca, sem área de entrada, segue o ponteiro.
 
-use crate::config::{self, Config, Hotkey, LlmConfig, Query};
+use crate::config::{self, Config, Hotkey, LlmConfig, NoteConfig, Query};
 use std::collections::HashSet;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
@@ -66,6 +66,7 @@ pub enum AppEvent {
     },
     HotkeyChanged(String),
     CopiesDirChanged(PathBuf),
+    NoteSizeChanged(NoteConfig),
     LlmChanged {
         llm: LlmConfig,
         queries: Vec<Query>,
@@ -901,8 +902,10 @@ impl X11 {
     fn apply_loaded(&mut self, next: Config, force_grab: bool) -> XResult<()> {
         let changed = next.hotkey != self.config.hotkey;
         let copies_changed = next.copies_dir != self.config.copies_dir;
+        let note_changed = next.note != self.config.note;
         let llm_changed = next.llm != self.config.llm || next.queries != self.config.queries;
         let copies_dir = next.copies_dir.clone();
+        let note = next.note.clone();
         let llm = next.llm.clone();
         let queries = next.queries.clone();
         if changed && !self.hotkey_paused {
@@ -924,6 +927,9 @@ impl X11 {
         }
         if copies_changed {
             let _ = self.to_gtk.send(AppEvent::CopiesDirChanged(copies_dir));
+        }
+        if note_changed {
+            let _ = self.to_gtk.send(AppEvent::NoteSizeChanged(note));
         }
         if llm_changed {
             let _ = self.to_gtk.send(AppEvent::LlmChanged { llm, queries });

@@ -162,7 +162,6 @@ dependencies = [
  "glib",
  "gtk",
  "libc",
- "pango",
  "serde",
  "serde_json",
  "toml",

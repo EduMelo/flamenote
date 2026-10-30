@@ -1,44 +1,49 @@
 # flamenote
 
-Notas flutuantes a partir do texto selecionado, no espírito do Flameshot.
+Floating notes from selected text, in the spirit of Flameshot.
 
-Ao iniciar, o programa fica na bandeja. Um atalho global arma a seleção: o cursor vira uma cruz e a caixa de ferramentas ainda não aparece. Esc nesse momento só devolve o cursor. Depois de selecionar texto na janela em foco, a caixa surge ao lado dessa seleção. A caixa tem duas ferramentas fixas: a primeira coloca o texto num bilhete branco, de cantos arredondados, sempre por cima das outras janelas; a segunda grava o texto num arquivo `.txt` na pasta de destino e deixa esse arquivo na área de transferência, pronto para colar. Consultas configuradas acrescentam até três botões que enviam o texto, com um pré-prompt, a um servidor compatível com OpenAI. O bilhete pode ser arrastado. Um clique duplo fecha o bilhete. Esc, com a caixa já aberta, fecha só a caixa.
+When it starts, the program lives in the tray. A global hotkey arms selection: the cursor turns into a crosshair and the toolbox does not appear yet. At that point, Esc only restores the cursor. After you select text in the focused window, the toolbox appears next to that selection. The toolbox has two fixed tools: the first puts the text on a light, rounded-corner note that always stays above other windows; the second saves the text to a `.txt` file in the destination folder and leaves that file on the clipboard, ready to paste. Configured queries add up to three buttons that send the text, with a preprompt, to an OpenAI-compatible server. The note can be dragged, resized from its edges, and its text can be edited. The corner icons copy all content, toggle editing, and open an eight-color palette. Double-clicking closes the note. With the toolbox already open, Esc closes only the toolbox.
 
-## Requisitos
+## Requirements
 
-Esta versão fala com o X11. No Wayland ela não sobe.
+This version targets X11. It does not run on Wayland.
 
-A bandeja usa o protocolo clássico do systray (XEmbed), o mesmo da i3bar com `tray_output`. Sem bandeja, o atalho continua valendo e o programa avisa isso uma vez.
+The tray uses the classic systray protocol (XEmbed), the same one used by i3bar with `tray_output`. Without a tray, the hotkey still works and the program reports this once.
 
-GTK 3 desenha as janelas. Com um compositor (picom, por exemplo) a sombra em volta do cartão aparece. Sem compositor, o flamenote recorta os cantos com uma máscara, para não deixar um quadrado preto.
+GTK 3 draws the windows. With a compositor (picom, for example), the shadow around the card is visible. Without a compositor, flamenote clips the corners with a mask so no black square is left behind.
 
-## Compilar e executar
+## Build and run
 
 ```bash
 cargo build --release
 ./target/release/flamenote
 ```
 
-No i3, uma linha de autostart:
+On i3, add this autostart line:
 
 ```
 exec --no-startup-id flamenote
 ```
 
-A segunda execução, enquanto a primeira vive, arma a seleção em vez de criar outro processo. Se a trava de instância já estiver ocupada e o pedido não chegar ao processo principal, o programa escreve `flamenote já está em execução.` e sai.
+While the first instance is running, a second invocation arms selection instead of creating another process. If the instance lock is already held and the request cannot reach the main process, the program prints a message saying it is already running and exits.
 
-## Configuração
+## Configuration
 
-O arquivo fica em `$XDG_CONFIG_HOME/flamenote/config.toml`, ou em `~/.config/flamenote/config.toml`. `FLAMENOTE_CONFIG` aponta para outro caminho. Na primeira execução o programa grava o padrão, se o arquivo ainda não existir, e relê a cada 2 segundos.
+The file lives at `$XDG_CONFIG_HOME/flamenote/config.toml`, or at `~/.config/flamenote/config.toml`. `FLAMENOTE_CONFIG` points to another path. On first run, the program writes the defaults if the file does not exist yet, and reloads it every 2 seconds.
 
 ```toml
-# Atalho global do flamenote.
-# Modificadores: Ctrl, Alt, Shift, Super.
-# Exemplos: "Super+Shift+N", "Ctrl+Alt+N", "F9"
+# flamenote global hotkey.
+# Modifiers: Ctrl, Alt, Shift, Super.
+# Examples: "Super+Shift+N", "Ctrl+Alt+N", "F9"
 hotkey = "Super+Shift+N"
-# Pasta onde o texto selecionado é salvo como arquivo.
-# Aceita caminho absoluto ou começando com ~.
+# Folder where selected text is saved as a file.
+# Accepts an absolute path or a path starting with ~.
 copies_dir = "~/copias"
+
+# Initial note size, in pixels. The edges can also be dragged.
+[note]
+width = 320
+height = 220
 
 [llm]
 base_url = "http://localhost:11434"
@@ -46,37 +51,42 @@ model = "qwen3:14b"
 api_key = ""
 
 [[queries]]
-prompt = "Resuma em uma frase:"
+prompt = "Summarize in one sentence:"
 destination = "clipboard"
 
 [[queries]]
-prompt = "Liste as tarefas:"
+prompt = "List the tasks:"
 destination = "file"
 ```
 
-O atalho padrão é `Super+Shift+N`. Esc não pode ser o atalho. Durante a seleção, Esc só devolve o cursor. Com a caixa aberta, Esc fecha a caixa. Um atalho inválido volta para o padrão e a mensagem sai no terminal.
+The default hotkey is `Super+Shift+N`. Esc cannot be the hotkey. During selection, Esc only restores the cursor. With the toolbox open, Esc closes the toolbox. An invalid hotkey falls back to the default and the message is printed to the terminal.
 
-A pasta de destino padrão é `~/copias`. Ela é criada quando o primeiro arquivo é salvo. Caminhos relativos são resolvidos a partir da pasta pessoal. Alterações no arquivo são relidas a cada 2 segundos.
+The default destination folder is `~/copias`. It is created when the first file is saved. Relative paths are resolved from the home folder. Changes to the file are reloaded every 2 seconds.
 
-`[llm]` aceita qualquer servidor com o endpoint `/v1/chat/completions` no formato OpenAI. `base_url` pode terminar em `/v1` ou já incluir o caminho completo; sem sufixo, o flamenote acrescenta `/v1/chat/completions`. Deixe `api_key` vazia em servidores locais, como o Ollama. Até três `[[queries]]` podem ser definidas. O `prompt` é enviado como mensagem de sistema e o texto selecionado como mensagem do usuário. `destination = "file"` grava a resposta na pasta de destino e deixa o arquivo na área de transferência; `destination = "clipboard"` copia o texto da resposta. O limite de saída é de 4096 tokens; uma resposta cortada pelo servidor não é salva e gera uma notificação de truncamento. O arquivo de configuração guarda a chave de API em texto puro, mas é gravado com permissão `600`.
+`[note]` defines the initial note size. `width` and `height` are the card width and height in pixels; accepted values range from 220 to 1600 for width and from 160 to 1200 for height. The initial aspect ratio is the ratio between the two and is maintained when zoom changes.
 
-O clique direito na bandeja abre “Configurações”. O campo do atalho, ao ser clicado, captura a próxima combinação. Ela é gravada na hora nesse arquivo e passa a valer em seguida. O campo “Pasta de destino” grava a pasta ao pressionar Enter ou ao sair do campo; deixar vazio volta para `~/copias`. Na aba “LLM”, o botão “Salvar configuração LLM” grava a URL, o modelo, a chave e as três consultas. Consultas com prompt vazio ficam desativadas.
+`[llm]` accepts any server with the `/v1/chat/completions` endpoint in OpenAI format. `base_url` may end with `/v1` or already include the full path; without a suffix, flamenote appends `/v1/chat/completions`. Leave `api_key` empty on local servers such as Ollama. Up to three `[[queries]]` can be defined. The `prompt` is sent as a system message and the selected text as the user message. `destination = "file"` saves the response to the destination folder and leaves the file on the clipboard; `destination = "clipboard"` copies the response text. The output limit is 4096 tokens; a response cut off by the server is not saved and triggers a truncation notification. The configuration file stores the API key in plain text but is written with `600` permissions.
 
-`FLAMENOTE_DEBUG=1` escreve no terminal o que a thread do X11 está fazendo.
+Right-clicking the tray opens Settings. Clicking the hotkey field captures the next key combination. It is written to that file immediately and takes effect right away. The destination folder field saves the folder when you press Enter or leave the field; leaving it empty restores `~/copias`. On the LLM tab, the button that saves the LLM configuration stores the URL, model, key, and the three queries. Queries with an empty prompt are disabled.
 
-## O que esta versão faz
+`FLAMENOTE_DEBUG=1` writes what the X11 thread is doing to the terminal.
 
-- O atalho, o clique esquerdo na bandeja e o item “Selecionar texto” do menu armam a seleção. O cursor do sistema some e uma cruz segue o ponteiro. A cruz não recebe cliques, então o arrasto continua valendo na janela que está embaixo. A caixa não abre nesse momento. Texto que já estava selecionado antes do atalho não abre a caixa.
-- Esc com a cruz na tela devolve o cursor e não fecha bilhetes. O atalho de novo também cancela.
-- Depois de um arrasto que seleciona texto, ou de uma seleção nova na janela em foco, a caixa aparece ao lado do fim da seleção. As ferramentas começam habilitadas com esse texto. Elas ficam desabilitadas se a seleção sumir antes do clique. Espaço em branco conta como nada selecionado.
-- As ferramentas leem a seleção primária do X11 (PRIMARY). O dono dessa seleção precisa ser a janela em foco, um parente dela na árvore de janelas, outro cliente do mesmo processo (`_NET_WM_PID`) ou a mesma conexão X11. Isso pega a janela invisível em que o GTK e o Chromium guardam a seleção. Duas janelas do mesmo processo podem habilitar as ferramentas mesmo com a seleção na que não está em foco.
-- A caixa de ferramentas não rouba o foco. Clique fora dela não a fecha. Fecham: Esc, o atalho de novo, o clique esquerdo na bandeja, ou o uso de uma ferramenta.
-- O clique direito na bandeja mostra “Selecionar texto”, “Configurações” e “Sair”.
-- O bilhete mostra o texto capturado, até 20 mil caracteres. Dá para arrastar. Um deslocamento menor que uns 3 pixels não conta como arrasto, para o clique duplo continuar fechando o bilhete.
-- O botão de arquivo usa até 30 caracteres da seleção como nome, trocando espaços por `_` e descartando outros caracteres. O texto é gravado com `.txt` na pasta de destino e o arquivo é copiado como item colável (`x-special/gnome-copied-files`), com uma notificação. Um nome repetido sobrescreve o arquivo anterior.
-- Cada consulta configurada ganha um botão com ícone de conversa; o tooltip mostra o pré-prompt. Ao clicar, a caixa fecha, o cursor fica livre e a requisição corre em segundo plano. Ao terminar, a resposta é gravada como arquivo ou copiada como texto, conforme o checkbox da consulta, e uma notificação informa o resultado ou o erro.
-- A roda do mouse rola o texto quando ele não cabe.
+## What this version does
 
-## Licença
+- The hotkey, a left click on the tray, and the “Select text” menu item arm selection. The system cursor disappears and a crosshair follows the pointer. The crosshair does not receive clicks, so dragging in the window underneath still works. The toolbox does not open at that point. Text that was already selected before the hotkey does not open the toolbox.
+- With the crosshair on screen, Esc restores the cursor and does not close notes. Pressing the hotkey again also cancels.
+- After a drag that selects text, or a new selection in the focused window, the toolbox appears next to the end of the selection. The tools start enabled with that text. They become disabled if the selection disappears before the click. Whitespace counts as nothing selected.
+- The tools read the X11 PRIMARY selection. The selection owner must be the focused window, a relative of it in the window tree, another client of the same process (`_NET_WM_PID`), or the same X11 connection. This catches the invisible window where GTK and Chromium store the selection. Two windows from the same process can enable the tools even when the selection is in the window that is not focused.
+- The toolbox does not steal focus. Clicking outside it does not close it. It closes on Esc, the hotkey again, a left click on the tray, or when a tool is used.
+- Right-clicking the tray shows “Select text”, “Settings”, and “Quit”.
+- The note shows the captured text, up to 20,000 characters. It starts at the size defined in `[note]`. You can drag it and resize it by dragging its edges or corners. A movement smaller than about 2 pixels does not count as a drag, so double-clicking still closes the note.
+- The note is a floating window managed by the window manager: it stays on the workspace where it was created and disappears when you switch workspaces. To move it to another workspace, use the normal i3 shortcuts for moving windows.
+- When the text does not fit the current size, a vertical scrollbar appears. The text wraps to fit the width. The mouse wheel scrolls the text.
+- The copy icon in the top-right corner puts all the note text on the clipboard. The pencil icon toggles text editing; Esc also leaves editing. The palette icon shows eight colors; when you choose one, the palette closes and the entire card takes on the chosen color.
+- Ctrl with the mouse wheel increases or decreases the note and its text together while keeping the current note aspect ratio. Without Ctrl, the wheel keeps scrolling the text.
+- The file tool uses up to 30 characters from the selection as the name, replacing spaces with `_` and discarding other characters. The text is written with a `.txt` extension in the destination folder and the file is copied as a pasteable item (`x-special/gnome-copied-files`), with a notification. A repeated name overwrites the previous file.
+- Each configured query gets a button with a chat icon; the tooltip shows the preprompt. When clicked, the toolbox closes, the cursor is released, and the request runs in the background. When it finishes, the response is saved as a file or copied as text according to the query checkbox, and a notification reports the result or the error.
+
+## License
 
 MIT. Copyright (c) 2026 EduMelo.

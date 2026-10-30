@@ -9,7 +9,7 @@ mod llm;
 mod ui;
 mod x11svc;
 
-use config::{LlmConfig, Query, QueryDestination};
+use config::{LlmConfig, NoteConfig, Query, QueryDestination};
 use gio::prelude::ApplicationExt;
 use gtk::prelude::*;
 use std::cell::RefCell;
@@ -34,6 +34,7 @@ struct App {
     config_path: std::path::PathBuf,
     hotkey_display: String,
     copies_dir: PathBuf,
+    note: NoteConfig,
     llm: LlmConfig,
     queries: Vec<Query>,
     llm_tx: glib::Sender<LlmOutcome>,
@@ -99,6 +100,7 @@ fn start(gtk_app: gtk::Application) -> Rc<RefCell<App>> {
         config_path: cfg.path.clone(),
         hotkey_display: cfg.hotkey.display,
         copies_dir: cfg.copies_dir.clone(),
+        note: cfg.note.clone(),
         llm: cfg.llm.clone(),
         queries: cfg.queries.clone(),
         llm_tx,
@@ -145,6 +147,9 @@ fn on_event(app: &Rc<RefCell<App>>, event: AppEvent) {
             if let Some(settings) = &this.settings {
                 settings.set_copies_dir(&config::display_path(&dir));
             }
+        }
+        AppEvent::NoteSizeChanged(note) => {
+            app.borrow_mut().note = note;
         }
         AppEvent::LlmChanged { llm, queries } => {
             let mut this = app.borrow_mut();
@@ -195,16 +200,16 @@ fn show_toolbox(app: &Rc<RefCell<App>>, x: i32, y: i32, text: String) {
 }
 
 fn capture(app: &Rc<RefCell<App>>) {
-    let (text, seq, notes) = {
+    let (text, seq, notes, note_size) = {
         let mut this = app.borrow_mut();
         let Some(text) = this.selection.clone() else {
             return;
         };
         let seq = this.note_seq;
         this.note_seq += 1;
-        (text, seq, this.notes.clone())
+        (text, seq, this.notes.clone(), this.note.clone())
     };
-    let note = ui::spawn_note(&text, seq);
+    let note = ui::spawn_note(&text, seq, &note_size);
     let notes_drop = notes.clone();
     note.connect_destroy(move |window| {
         notes_drop
@@ -499,15 +504,16 @@ fn open_settings(app: &Rc<RefCell<App>>) {
     let to_x11_hotkey = to_x11.clone();
     let app_save = app.clone();
     let on_save = Rc::new(move |hotkey: &config::Hotkey| {
-        let (copies_dir, llm, queries) = {
+        let (copies_dir, note, llm, queries) = {
             let this = app_save.borrow();
             (
                 this.copies_dir.clone(),
+                this.note.clone(),
                 this.llm.clone(),
                 this.queries.clone(),
             )
         };
-        config::save_config(&path_hotkey, hotkey, &copies_dir, &llm, &queries)
+        config::save_config(&path_hotkey, hotkey, &copies_dir, &note, &llm, &queries)
             .map_err(|err| format!("Não salvei o atalho: {err}"))?;
         app_save.borrow_mut().hotkey_display = hotkey.display.clone();
         let _ = to_x11_hotkey.send(Command::ReloadConfig);
@@ -521,14 +527,19 @@ fn open_settings(app: &Rc<RefCell<App>>) {
         if dir.exists() && !dir.is_dir() {
             return Err(format!("{} não é uma pasta", dir.display()));
         }
-        let (hotkey, llm, queries) = {
+        let (hotkey, note, llm, queries) = {
             let this = app_save_dir.borrow();
             let hotkey = config::parse_hotkey(&this.hotkey_display).unwrap_or_else(|_| {
                 config::parse_hotkey(config::DEFAULT_HOTKEY).expect("atalho padrão")
             });
-            (hotkey, this.llm.clone(), this.queries.clone())
+            (
+                hotkey,
+                this.note.clone(),
+                this.llm.clone(),
+                this.queries.clone(),
+            )
         };
-        config::save_config(&path_dir, &hotkey, &dir, &llm, &queries)
+        config::save_config(&path_dir, &hotkey, &dir, &note, &llm, &queries)
             .map_err(|err| format!("Não salvei a pasta: {err}"))?;
         app_save_dir.borrow_mut().copies_dir = dir.clone();
         Ok(config::display_path(&dir))
@@ -552,14 +563,14 @@ fn open_settings(app: &Rc<RefCell<App>>) {
         if !queries.is_empty() && (llm.base_url.is_empty() || llm.model.is_empty()) {
             return Err("Defina a base URL e o modelo para usar as consultas.".into());
         }
-        let (hotkey, copies_dir) = {
+        let (hotkey, copies_dir, note) = {
             let this = app_save_llm.borrow();
             let hotkey = config::parse_hotkey(&this.hotkey_display).unwrap_or_else(|_| {
                 config::parse_hotkey(config::DEFAULT_HOTKEY).expect("atalho padrão")
             });
-            (hotkey, this.copies_dir.clone())
+            (hotkey, this.copies_dir.clone(), this.note.clone())
         };
-        config::save_config(&path_llm, &hotkey, &copies_dir, &llm, &queries)
+        config::save_config(&path_llm, &hotkey, &copies_dir, &note, &llm, &queries)
             .map_err(|err| format!("Não salvei a configuração LLM: {err}"))?;
         let mut this = app_save_llm.borrow_mut();
         this.llm = llm;

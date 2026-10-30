@@ -1,6 +1,8 @@
 //! Caixa de ferramentas, bilhetes flutuantes e a janela de configuração.
 
-use crate::config::{self, CaptureMods, Hotkey, LlmConfig, Query, QueryDestination, MAX_QUERIES};
+use crate::config::{
+    self, CaptureMods, Hotkey, LlmConfig, NoteConfig, Query, QueryDestination, MAX_QUERIES,
+};
 use gdk::EventMask;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -13,6 +15,31 @@ const BUTTON_SIDE: f64 = 40.0;
 const BUTTON_GAP: f64 = 10.0;
 const BUTTON_PAD: f64 = 12.0;
 
+const NOTE_FONT: f64 = 14.0;
+const NOTE_MIN_FONT: f64 = 8.0;
+const NOTE_MAX_FONT: f64 = 72.0;
+const NOTE_HEADER_H: i32 = 24;
+const NOTE_ICON_SIDE: f64 = 20.0;
+const NOTE_ICON_TOP: f64 = SHADOW + 10.0;
+const NOTE_ICON_RIGHT: f64 = SHADOW + 14.0;
+const NOTE_ICON_GAP: f64 = 6.0;
+const NOTE_RESIZE_GRIP: f64 = 8.0;
+const PALETTE_COLS: usize = 4;
+const PALETTE_SWATCH: f64 = 20.0;
+const PALETTE_GAP: f64 = 6.0;
+const PALETTE_PAD: f64 = 10.0;
+
+const NOTE_COLORS: [(u8, u8, u8); 8] = [
+    (255, 255, 255),
+    (255, 243, 196),
+    (255, 216, 181),
+    (255, 214, 224),
+    (228, 217, 255),
+    (207, 232, 255),
+    (207, 245, 221),
+    (230, 230, 235),
+];
+
 const TOOLTIP_DISABLED: &str = "Nenhum texto selecionado na janela em foco";
 const TOOLTIP_ENABLED: &str = "Usar o texto selecionado";
 
@@ -21,6 +48,13 @@ pub enum ToolIcon {
     Note,
     File,
     Llm,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NoteIcon {
+    Copy,
+    Edit,
+    Palette,
 }
 
 #[derive(Clone)]
@@ -50,7 +84,7 @@ pub struct Toolbox {
 pub fn install_style() {
     let provider = gtk::CssProvider::new();
     let css = br#"
-        window, box, eventbox, label, drawingarea {
+        window, box, eventbox, label, textview, layout, drawingarea {
             background-color: transparent;
             border: none;
             box-shadow: none;
@@ -64,6 +98,24 @@ pub fn install_style() {
             color: #1e1e2e;
             font-family: Inter, "DejaVu Sans", sans-serif;
             font-size: 14px;
+        }
+        textview.flamenote-text,
+        textview.flamenote-text text {
+            background-color: transparent;
+            color: #1e1e2e;
+            font-family: Inter, "DejaVu Sans", sans-serif;
+            font-size: 14px;
+            caret-color: #1e1e2e;
+        }
+        textview.flamenote-text border {
+            border: none;
+            background-color: transparent;
+        }
+        scrolledwindow.flamenote-scroll,
+        scrolledwindow.flamenote-scroll viewport {
+            background-color: transparent;
+            border: none;
+            box-shadow: none;
         }
         window.flamenote-settings,
         window.flamenote-settings box {
@@ -305,53 +357,61 @@ impl Toolbox {
     }
 }
 
-pub fn spawn_note(text: &str, seq: i32) -> gtk::Window {
+pub fn spawn_note(text: &str, seq: i32, note: &NoteConfig) -> gtk::Window {
     let text = truncate_note(text);
-    let window = gtk::Window::new(gtk::WindowType::Popup);
-    prepare_floating(&window, false, 16);
+    let note = note.clamped();
+    let shadow = SHADOW as i32;
+    let margin = (SHADOW + CARD_PAD) as i32;
+    let ww = note.width + shadow * 2;
+    let wh = note.height + shadow * 2;
+
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
+    prepare_note(&window, 16);
     window.set_title("flamenote");
 
-    let label = gtk::Label::new(Some(&text));
-    label.set_line_wrap(true);
-    label.set_line_wrap_mode(pango::WrapMode::WordChar);
-    label.set_xalign(0.0);
-    label.set_yalign(0.0);
-    label.set_selectable(false);
-    label.set_can_focus(false);
-    label.style_context().add_class("flamenote-text");
-
-    let longest = text
-        .lines()
-        .map(|line| line.chars().count())
-        .max()
-        .unwrap_or(1);
-    let content_w = ((longest as i32) * 8 + 24).clamp(180, 420);
-    label.set_size_request(content_w, -1);
-    let natural_h = label.preferred_height_for_width(content_w).1;
-    let text_h = natural_h.clamp(22, 300);
-    let scroll = natural_h > 300;
+    let buffer = gtk::TextBuffer::new(None::<&gtk::TextTagTable>);
+    buffer.set_text(&text);
+    let view = gtk::TextView::with_buffer(&buffer);
+    view.set_wrap_mode(gtk::WrapMode::WordChar);
+    view.set_editable(false);
+    view.set_cursor_visible(false);
+    view.set_can_focus(false);
+    view.set_left_margin(0);
+    view.set_right_margin(0);
+    view.set_top_margin(0);
+    view.set_bottom_margin(0);
+    view.set_pixels_above_lines(0);
+    view.set_pixels_below_lines(0);
+    view.set_pixels_inside_wrap(0);
+    view.style_context().add_class("flamenote-text");
 
     let sw = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
-    sw.set_policy(
-        gtk::PolicyType::Never,
-        if scroll {
-            gtk::PolicyType::Automatic
-        } else {
-            gtk::PolicyType::Never
-        },
-    );
+    sw.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
     sw.set_shadow_type(gtk::ShadowType::None);
-    sw.set_size_request(content_w, text_h);
+    sw.style_context().add_class("flamenote-scroll");
+    sw.set_size_request(ww - margin * 2, wh - margin * 2 - NOTE_HEADER_H);
     sw.set_can_focus(false);
-    sw.add(&label);
+    sw.add(&view);
 
-    let margin = (SHADOW + CARD_PAD) as i32;
+    let layout = gtk::Layout::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+    layout.set_hexpand(true);
+    layout.set_vexpand(true);
+    layout.put(&sw, 0, 0);
+    let layout_sw = sw.clone();
+    layout.connect_size_allocate(move |_, alloc| {
+        layout_sw.set_size_request(alloc.width(), alloc.height());
+    });
+
     let inner = gtk::Box::new(gtk::Orientation::Vertical, 0);
     inner.set_margin_top(margin);
     inner.set_margin_bottom(margin);
     inner.set_margin_start(margin);
     inner.set_margin_end(margin);
-    inner.add(&sw);
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    header.set_size_request(-1, NOTE_HEADER_H);
+    header.set_can_focus(false);
+    inner.add(&header);
+    inner.add(&layout);
 
     let events = gtk::EventBox::new();
     events.set_above_child(true);
@@ -378,47 +438,251 @@ pub fn spawn_note(text: &str, seq: i32) -> gtk::Window {
     );
     events.add(&inner);
     window.add(&events);
-    events.connect_draw(|widget, cr| {
+
+    let editing = Rc::new(Cell::new(false));
+    let hovered = Rc::new(Cell::new(None::<NoteIcon>));
+    let copied = Rc::new(Cell::new(false));
+    let note_w = Rc::new(Cell::new(ww));
+    let note_h = Rc::new(Cell::new(wh));
+    let aspect = Rc::new(Cell::new(ww as f64 / wh as f64));
+    let note_color = Rc::new(Cell::new(NOTE_COLORS[0]));
+    let palette = Rc::new(RefCell::new(None::<gtk::Window>));
+
+    let draw_editing = editing.clone();
+    let draw_hovered = hovered.clone();
+    let draw_copied = copied.clone();
+    let draw_color = note_color.clone();
+    events.connect_draw(move |widget, cr| {
         let alloc = widget.allocation();
-        paint_note(cr, alloc.width() as f64, alloc.height() as f64);
+        let width = alloc.width() as f64;
+        paint_note(cr, width, alloc.height() as f64, draw_color.get());
+        if let Some(child) = widget.child() {
+            widget.propagate_draw(&child, cr);
+        }
+        paint_note_icons(
+            cr,
+            width,
+            draw_editing.get(),
+            draw_hovered.get(),
+            draw_copied.get(),
+            draw_color.get(),
+        );
+        glib::Propagation::Stop
+    });
+
+    let window_color = note_color.clone();
+    window.connect_draw(move |widget, cr| {
+        let alloc = widget.allocation();
+        paint_note(
+            cr,
+            alloc.width() as f64,
+            alloc.height() as f64,
+            window_color.get(),
+        );
         if let Some(child) = widget.child() {
             widget.propagate_draw(&child, cr);
         }
         glib::Propagation::Stop
     });
 
-    window.connect_draw(|widget, cr| {
-        let alloc = widget.allocation();
-        paint_note(cr, alloc.width() as f64, alloc.height() as f64);
-        if let Some(child) = widget.child() {
-            widget.propagate_draw(&child, cr);
-        }
-        glib::Propagation::Stop
-    });
+    let set_note_size: Rc<dyn Fn(i32, i32)> = {
+        let note_w = note_w.clone();
+        let note_h = note_h.clone();
+        let window_size = window.clone();
+        Rc::new(move |width: i32, height: i32| {
+            note_w.set(width);
+            note_h.set(height);
+            window_size.resize(width, height);
+        })
+    };
+
+    let font_provider = gtk::CssProvider::new();
+    view.style_context()
+        .add_provider(&font_provider, gtk::STYLE_PROVIDER_PRIORITY_USER);
+    let font_size = Rc::new(Cell::new(NOTE_FONT));
+    let apply_zoom: Rc<dyn Fn(f64)> = {
+        let font_size = font_size.clone();
+        let provider = font_provider.clone();
+        let note_w = note_w.clone();
+        let note_h = note_h.clone();
+        let aspect = aspect.clone();
+        let apply_size = set_note_size.clone();
+        Rc::new(move |step: f64| {
+            let current_width = note_w.get() as f64;
+            let current_font = font_size.get();
+            let ratio = aspect.get();
+            let (min_w, min_h, max_w, max_h) = note_limits();
+            let width_low = (min_w as f64)
+                .max(min_h as f64 * ratio)
+                .max(current_width * NOTE_MIN_FONT / current_font);
+            let width_high = (max_w as f64)
+                .min(max_h as f64 * ratio)
+                .min(current_width * NOTE_MAX_FONT / current_font);
+            if width_low > width_high {
+                return;
+            }
+            let wanted = (1.0 + step).max(0.01);
+            let width = (current_width * wanted)
+                .clamp(width_low, width_high)
+                .round() as i32;
+            let height = ((width as f64) / ratio).round().max(1.0) as i32;
+            if width == note_w.get() && height == note_h.get() {
+                return;
+            }
+            let applied = width as f64 / current_width;
+            let next_font = (current_font * applied).clamp(NOTE_MIN_FONT, NOTE_MAX_FONT);
+            font_size.set(next_font);
+            let css = format!(
+                "textview.flamenote-text, textview.flamenote-text text {{ font-size: {next_font:.1}px; }}"
+            );
+            let _ = provider.load_from_data(css.as_bytes());
+            apply_size(width, height);
+        })
+    };
+
+    let set_editing: Rc<dyn Fn(bool)> = {
+        let editing = editing.clone();
+        let view_edit = view.clone();
+        let buffer_edit = buffer.clone();
+        let events_edit = events.clone();
+        let window_edit = window.clone();
+        let previous_focus = Rc::new(Cell::new(None::<u32>));
+        Rc::new(move |on: bool| {
+            if editing.get() == on {
+                return;
+            }
+            editing.set(on);
+            view_edit.set_editable(on);
+            view_edit.set_cursor_visible(on);
+            view_edit.set_can_focus(on);
+            events_edit.set_above_child(!on);
+            window_edit.set_accept_focus(on);
+            if let Some(gdk_win) = window_edit.window() {
+                gdk_win.set_accept_focus(on);
+                if on {
+                    previous_focus.set(focus_window(&gdk_win));
+                } else if let Some(previous) = previous_focus.take() {
+                    restore_focus(previous);
+                }
+            }
+            if on {
+                view_edit.grab_focus();
+                let end = buffer_edit.end_iter();
+                buffer_edit.place_cursor(&end);
+            }
+            events_edit.queue_draw();
+        })
+    };
+
+    let close_palette: Rc<dyn Fn()> = {
+        let palette = palette.clone();
+        Rc::new(move || {
+            let current = palette.borrow_mut().take();
+            if let Some(palette_window) = current {
+                palette_window.close();
+            }
+        })
+    };
 
     let drag = Rc::new(RefCell::new(Drag::default()));
     let drag_press = drag.clone();
     let win_press = window.clone();
-    events.connect_button_press_event(move |_, event| {
+    let press_editing = editing.clone();
+    let press_set_editing = set_editing.clone();
+    let press_buffer = buffer.clone();
+    let press_copied = copied.clone();
+    let press_events = events.clone();
+    let press_color = note_color.clone();
+    let press_palette = palette.clone();
+    let press_close_palette = close_palette.clone();
+    events.connect_button_press_event(move |widget, event| {
         if event.button() != 1 {
             return glib::Propagation::Proceed;
         }
+        let (px, py) = event.position();
+        let alloc = widget.allocation();
+        let width = alloc.width() as f64;
+        let height = alloc.height() as f64;
+        if let Some(icon) = note_icon_at(px, py, width) {
+            if event.event_type() == gdk::EventType::ButtonPress {
+                match icon {
+                    NoteIcon::Copy => {
+                        press_close_palette();
+                        let text = press_buffer
+                            .text(&press_buffer.start_iter(), &press_buffer.end_iter(), true)
+                            .unwrap_or_default();
+                        gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD).set_text(&text);
+                        press_copied.set(true);
+                        widget.queue_draw();
+                        let copied_reset = press_copied.clone();
+                        let events_reset = press_events.clone();
+                        glib::timeout_add_local(std::time::Duration::from_millis(900), move || {
+                            copied_reset.set(false);
+                            events_reset.queue_draw();
+                            glib::ControlFlow::Break
+                        });
+                    }
+                    NoteIcon::Edit => {
+                        press_close_palette();
+                        let on = !press_editing.get();
+                        press_set_editing(on);
+                    }
+                    NoteIcon::Palette => {
+                        if press_palette.borrow().is_some() {
+                            press_close_palette();
+                        } else {
+                            let (note_x, note_y) = win_press.position();
+                            let (_, icon_y) = note_icon_origin(width, NoteIcon::Palette);
+                            let anchor_x = note_x + alloc.width();
+                            let anchor_y = note_y + icon_y as i32 + NOTE_ICON_SIDE as i32;
+                            let color_cell = press_color.clone();
+                            let redraw = press_events.clone();
+                            let on_pick = Rc::new(move |color| {
+                                color_cell.set(color);
+                                redraw.queue_draw();
+                            });
+                            let palette_window =
+                                spawn_palette(anchor_x, anchor_y, press_color.get(), on_pick);
+                            let palette_drop = press_palette.clone();
+                            palette_window.connect_destroy(move |_| {
+                                let _ = palette_drop.borrow_mut().take();
+                            });
+                            *press_palette.borrow_mut() = Some(palette_window);
+                        }
+                    }
+                }
+            }
+            return glib::Propagation::Stop;
+        }
+        press_close_palette();
+        let edges = resize_edges_at(px, py, width, height);
         if event.event_type() == gdk::EventType::DoubleButtonPress {
-            win_press.close();
+            if !press_editing.get() && !edges.any() {
+                win_press.close();
+            }
             return glib::Propagation::Stop;
         }
         if event.event_type() != gdk::EventType::ButtonPress {
             return glib::Propagation::Proceed;
         }
+        if !edges.any() && press_editing.get() {
+            return glib::Propagation::Proceed;
+        }
         let (root_x, root_y) = event.root();
         let (win_x, win_y) = win_press.position();
         *drag_press.borrow_mut() = Drag {
-            armed: true,
+            mode: if edges.any() {
+                DragMode::Resize(edges)
+            } else {
+                DragMode::Move
+            },
             moved: false,
             press_x: root_x,
             press_y: root_y,
             origin_x: win_x,
             origin_y: win_y,
+            origin_w: alloc.width(),
+            origin_h: alloc.height(),
         };
         if let Some(gdk_win) = win_press.window() {
             gdk_win.raise();
@@ -428,53 +692,148 @@ pub fn spawn_note(text: &str, seq: i32) -> gtk::Window {
 
     let drag_motion = drag.clone();
     let win_motion = window.clone();
-    events.connect_motion_notify_event(move |_, event| {
+    let motion_hovered = hovered.clone();
+    let motion_events = events.clone();
+    let motion_resize = set_note_size.clone();
+    let motion_aspect = aspect.clone();
+    events.connect_motion_notify_event(move |widget, event| {
+        let (px, py) = event.position();
+        let alloc = widget.allocation();
+        let width = alloc.width() as f64;
+        let height = alloc.height() as f64;
+        let next = note_icon_at(px, py, width);
+        if next != motion_hovered.get() {
+            motion_hovered.set(next);
+            widget.queue_draw();
+            let tooltip = match next {
+                Some(NoteIcon::Copy) => Some("Copiar o texto do bilhete"),
+                Some(NoteIcon::Edit) => Some("Editar o texto do bilhete"),
+                Some(NoteIcon::Palette) => Some("Mudar a cor do bilhete"),
+                None => None,
+            };
+            motion_events.set_tooltip_text(tooltip);
+        }
+        let edges = resize_edges_at(px, py, width, height);
+        let cursor = if next.is_some() {
+            Some(gdk::CursorType::Hand1)
+        } else if edges.any() {
+            Some(edges.cursor())
+        } else {
+            Some(gdk::CursorType::Arrow)
+        };
+        if let (Some(cursor), Some(win), Some(display)) =
+            (cursor, widget.window(), gdk::Display::default())
+        {
+            if let Some(cursor) = gdk::Cursor::for_display(&display, cursor) {
+                win.set_cursor(Some(&cursor));
+            }
+        }
+
         let mut drag = drag_motion.borrow_mut();
-        if !drag.armed {
+        if drag.mode == DragMode::Idle {
             return glib::Propagation::Proceed;
         }
         let (root_x, root_y) = event.root();
         let dx = root_x - drag.press_x;
         let dy = root_y - drag.press_y;
-        if dx * dx + dy * dy > 9.0 {
+        if dx * dx + dy * dy > 4.0 {
             drag.moved = true;
         }
-        if drag.moved {
-            win_motion.move_(drag.origin_x + dx as i32, drag.origin_y + dy as i32);
+        if !drag.moved {
+            return glib::Propagation::Stop;
+        }
+        match drag.mode {
+            DragMode::Move => {
+                win_motion.move_(drag.origin_x + dx as i32, drag.origin_y + dy as i32);
+            }
+            DragMode::Resize(edges) => {
+                let (x, y, w, h) = resized_note(
+                    edges,
+                    (drag.origin_x, drag.origin_y, drag.origin_w, drag.origin_h),
+                    dx,
+                    dy,
+                );
+                win_motion.move_(x, y);
+                motion_resize(w, h);
+                motion_aspect.set(w as f64 / h as f64);
+            }
+            DragMode::Idle => {}
         }
         glib::Propagation::Stop
+    });
+
+    let leave_hovered = hovered.clone();
+    events.connect_leave_notify_event(move |widget, _| {
+        if leave_hovered.get().is_some() {
+            leave_hovered.set(None);
+            widget.queue_draw();
+        }
+        widget.set_tooltip_text(None);
+        if let (Some(win), Some(display)) = (widget.window(), gdk::Display::default()) {
+            if let Some(cursor) = gdk::Cursor::for_display(&display, gdk::CursorType::Arrow) {
+                win.set_cursor(Some(&cursor));
+            }
+        }
+        glib::Propagation::Proceed
     });
 
     let drag_release = drag.clone();
     events.connect_button_release_event(move |_, event| {
         if event.button() == 1 {
-            drag_release.borrow_mut().armed = false;
+            drag_release.borrow_mut().mode = DragMode::Idle;
         }
         glib::Propagation::Proceed
     });
 
     let sw_scroll = sw.clone();
+    let zoom_scroll = apply_zoom.clone();
+    let scroll_close_palette = close_palette.clone();
     events.connect_scroll_event(move |_, event| {
-        let adj = sw_scroll.vadjustment();
-        let delta = match event.direction() {
-            gdk::ScrollDirection::Up => -48.0,
-            gdk::ScrollDirection::Down => 48.0,
-            gdk::ScrollDirection::Smooth => event.delta().1 * 48.0,
-            _ => 0.0,
-        };
-        if delta == 0.0 {
-            return glib::Propagation::Proceed;
-        }
-        let max = (adj.upper() - adj.page_size()).max(adj.lower());
-        adj.set_value((adj.value() + delta).clamp(adj.lower(), max));
-        glib::Propagation::Stop
+        scroll_close_palette();
+        note_scroll(event, &sw_scroll, &zoom_scroll)
     });
 
-    let ww = content_w + margin * 2;
-    let wh = text_h + margin * 2;
+    let sw_view_scroll = sw.clone();
+    let zoom_view_scroll = apply_zoom.clone();
+    let view_close_palette = close_palette.clone();
+    view.connect_scroll_event(move |_, event| {
+        view_close_palette();
+        note_scroll(event, &sw_view_scroll, &zoom_view_scroll)
+    });
+
+    let palette_destroy = palette.clone();
+    window.connect_destroy(move |_| {
+        let current = palette_destroy.borrow_mut().take();
+        if let Some(palette_window) = current {
+            palette_window.close();
+        }
+    });
+
+    let key_set_editing = set_editing.clone();
+    view.connect_key_press_event(move |_, event| {
+        if event.keyval() == gdk::keys::constants::Escape {
+            key_set_editing(false);
+            return glib::Propagation::Stop;
+        }
+        glib::Propagation::Proceed
+    });
+
     window.set_default_size(ww, wh);
     let (x, y) = place_note(ww, wh, seq);
     window.move_(x, y);
+    let placed = Rc::new(Cell::new(false));
+    let map_placed = placed.clone();
+    let map_window = window.clone();
+    window.connect_map(move |_| {
+        if map_placed.replace(true) {
+            return;
+        }
+        let place_window = map_window.clone();
+        glib::idle_add_local(move || {
+            place_window.move_(x, y);
+            glib::ControlFlow::Break
+        });
+    });
     window.show_all();
     if let Some(gdk_win) = window.window() {
         select_pointer_events(&gdk_win);
@@ -486,14 +845,463 @@ pub fn spawn_note(text: &str, seq: i32) -> gtk::Window {
     window
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct ResizeEdges {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
+impl ResizeEdges {
+    fn any(self) -> bool {
+        self.left || self.right || self.top || self.bottom
+    }
+
+    fn cursor(self) -> gdk::CursorType {
+        if self.left && self.top {
+            gdk::CursorType::TopLeftCorner
+        } else if self.right && self.top {
+            gdk::CursorType::TopRightCorner
+        } else if self.left && self.bottom {
+            gdk::CursorType::BottomLeftCorner
+        } else if self.right && self.bottom {
+            gdk::CursorType::BottomRightCorner
+        } else if self.left {
+            gdk::CursorType::LeftSide
+        } else if self.right {
+            gdk::CursorType::RightSide
+        } else if self.top {
+            gdk::CursorType::TopSide
+        } else if self.bottom {
+            gdk::CursorType::BottomSide
+        } else {
+            gdk::CursorType::Arrow
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum DragMode {
+    #[default]
+    Idle,
+    Move,
+    Resize(ResizeEdges),
+}
+
 #[derive(Default)]
 struct Drag {
-    armed: bool,
+    mode: DragMode,
     moved: bool,
     press_x: f64,
     press_y: f64,
     origin_x: i32,
     origin_y: i32,
+    origin_w: i32,
+    origin_h: i32,
+}
+
+fn note_limits() -> (i32, i32, i32, i32) {
+    let shadow = SHADOW as i32;
+    (
+        config::MIN_NOTE_WIDTH + shadow * 2,
+        config::MIN_NOTE_HEIGHT + shadow * 2,
+        config::MAX_NOTE_WIDTH + shadow * 2,
+        config::MAX_NOTE_HEIGHT + shadow * 2,
+    )
+}
+
+fn resize_edges_at(x: f64, y: f64, width: f64, height: f64) -> ResizeEdges {
+    let left = SHADOW;
+    let right = width - SHADOW;
+    let top = SHADOW;
+    let bottom = height - SHADOW;
+    ResizeEdges {
+        left: x <= left + NOTE_RESIZE_GRIP && x >= 0.0,
+        right: x >= right - NOTE_RESIZE_GRIP && x <= width,
+        top: y <= top + NOTE_RESIZE_GRIP && y >= 0.0,
+        bottom: y >= bottom - NOTE_RESIZE_GRIP && y <= height,
+    }
+}
+
+fn resized_note(
+    edges: ResizeEdges,
+    origin: (i32, i32, i32, i32),
+    dx: f64,
+    dy: f64,
+) -> (i32, i32, i32, i32) {
+    let (ox, oy, ow, oh) = origin;
+    let (min_w, min_h, max_w, max_h) = note_limits();
+    let dx = dx.round() as i32;
+    let dy = dy.round() as i32;
+    let mut x = ox;
+    let mut y = oy;
+    let mut width = ow;
+    let mut height = oh;
+    if edges.right {
+        width = (ow + dx).clamp(min_w, max_w);
+    }
+    if edges.left {
+        let right = ox + ow;
+        x = (ox + dx).clamp(right - max_w, right - min_w);
+        width = right - x;
+    }
+    if edges.bottom {
+        height = (oh + dy).clamp(min_h, max_h);
+    }
+    if edges.top {
+        let bottom = oy + oh;
+        y = (oy + dy).clamp(bottom - max_h, bottom - min_h);
+        height = bottom - y;
+    }
+    (x, y, width, height)
+}
+
+fn note_icon_origin(width: f64, icon: NoteIcon) -> (f64, f64) {
+    let copy_x = width - NOTE_ICON_RIGHT - NOTE_ICON_SIDE;
+    let x = match icon {
+        NoteIcon::Copy => copy_x,
+        NoteIcon::Edit => copy_x - NOTE_ICON_SIDE - NOTE_ICON_GAP,
+        NoteIcon::Palette => copy_x - (NOTE_ICON_SIDE + NOTE_ICON_GAP) * 2.0,
+    };
+    (x, NOTE_ICON_TOP)
+}
+
+fn note_icon_at(x: f64, y: f64, width: f64) -> Option<NoteIcon> {
+    for icon in [NoteIcon::Copy, NoteIcon::Edit, NoteIcon::Palette] {
+        let (ix, iy) = note_icon_origin(width, icon);
+        let pad = 4.0;
+        if x >= ix - pad
+            && x <= ix + NOTE_ICON_SIDE + pad
+            && y >= iy - pad
+            && y <= iy + NOTE_ICON_SIDE + pad
+        {
+            return Some(icon);
+        }
+    }
+    None
+}
+
+fn note_scroll(
+    event: &gdk::EventScroll,
+    sw: &gtk::ScrolledWindow,
+    zoom: &Rc<dyn Fn(f64)>,
+) -> glib::Propagation {
+    if event.state().contains(gdk::ModifierType::CONTROL_MASK) {
+        let step = match event.direction() {
+            gdk::ScrollDirection::Up => Some(0.1),
+            gdk::ScrollDirection::Down => Some(-0.1),
+            gdk::ScrollDirection::Smooth => {
+                let dy = event.delta().1;
+                if dy < 0.0 {
+                    Some(0.06)
+                } else if dy > 0.0 {
+                    Some(-0.06)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(step) = step {
+            zoom(step);
+        }
+        return glib::Propagation::Stop;
+    }
+    let adj = sw.vadjustment();
+    let delta = match event.direction() {
+        gdk::ScrollDirection::Up => -48.0,
+        gdk::ScrollDirection::Down => 48.0,
+        gdk::ScrollDirection::Smooth => event.delta().1 * 48.0,
+        _ => 0.0,
+    };
+    if delta == 0.0 {
+        return glib::Propagation::Proceed;
+    }
+    let max = (adj.upper() - adj.page_size()).max(adj.lower());
+    adj.set_value((adj.value() + delta).clamp(adj.lower(), max));
+    glib::Propagation::Stop
+}
+
+fn color_components(color: (u8, u8, u8)) -> (f64, f64, f64) {
+    (
+        color.0 as f64 / 255.0,
+        color.1 as f64 / 255.0,
+        color.2 as f64 / 255.0,
+    )
+}
+
+fn palette_size() -> (i32, i32) {
+    let card_w = (PALETTE_COLS as f64) * PALETTE_SWATCH
+        + ((PALETTE_COLS - 1) as f64) * PALETTE_GAP
+        + PALETTE_PAD * 2.0;
+    let card_h = 2.0 * PALETTE_SWATCH + PALETTE_GAP + PALETTE_PAD * 2.0;
+    (
+        card_w as i32 + SHADOW as i32 * 2,
+        card_h as i32 + SHADOW as i32 * 2,
+    )
+}
+
+fn palette_swatch_center(index: usize) -> (f64, f64) {
+    let origin_x = SHADOW + PALETTE_PAD;
+    let origin_y = SHADOW + PALETTE_PAD;
+    let column = index % PALETTE_COLS;
+    let row = index / PALETTE_COLS;
+    (
+        origin_x + column as f64 * (PALETTE_SWATCH + PALETTE_GAP) + PALETTE_SWATCH / 2.0,
+        origin_y + row as f64 * (PALETTE_SWATCH + PALETTE_GAP) + PALETTE_SWATCH / 2.0,
+    )
+}
+
+fn palette_index_at(x: f64, y: f64) -> Option<usize> {
+    for index in 0..NOTE_COLORS.len() {
+        let (cx, cy) = palette_swatch_center(index);
+        let dx = x - cx;
+        let dy = y - cy;
+        let radius = PALETTE_SWATCH / 2.0 + 3.0;
+        if dx * dx + dy * dy <= radius * radius {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn paint_palette(
+    cr: &cairo::Context,
+    width: f64,
+    height: f64,
+    selected: (u8, u8, u8),
+    hovered: Option<usize>,
+) {
+    paint_note(cr, width, height, (247, 245, 248));
+    for (index, color) in NOTE_COLORS.iter().enumerate() {
+        let (cx, cy) = palette_swatch_center(index);
+        if hovered == Some(index) {
+            cr.arc(
+                cx,
+                cy,
+                PALETTE_SWATCH / 2.0 + 3.0,
+                0.0,
+                std::f64::consts::TAU,
+            );
+            cr.set_source_rgba(0.05, 0.05, 0.08, 0.10);
+            let _ = cr.fill();
+        }
+        let (red, green, blue) = color_components(*color);
+        cr.arc(cx, cy, PALETTE_SWATCH / 2.0, 0.0, std::f64::consts::TAU);
+        cr.set_source_rgb(red, green, blue);
+        let _ = cr.fill_preserve();
+        cr.set_source_rgba(0.05, 0.05, 0.08, 0.20);
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+        if *color == selected {
+            cr.arc(
+                cx,
+                cy,
+                PALETTE_SWATCH / 2.0 + 3.5,
+                0.0,
+                std::f64::consts::TAU,
+            );
+            cr.set_source_rgb(0.28, 0.30, 0.38);
+            cr.set_line_width(1.6);
+            let _ = cr.stroke();
+        }
+    }
+}
+
+fn paint_note_icons(
+    cr: &cairo::Context,
+    width: f64,
+    editing: bool,
+    hovered: Option<NoteIcon>,
+    copied: bool,
+    note_color: (u8, u8, u8),
+) {
+    for icon in [NoteIcon::Copy, NoteIcon::Edit, NoteIcon::Palette] {
+        let (x, y) = note_icon_origin(width, icon);
+        if hovered == Some(icon) {
+            cr.arc(
+                x + NOTE_ICON_SIDE / 2.0,
+                y + NOTE_ICON_SIDE / 2.0,
+                NOTE_ICON_SIDE / 2.0 + 3.0,
+                0.0,
+                std::f64::consts::TAU,
+            );
+            cr.set_source_rgba(0.05, 0.05, 0.08, 0.07);
+            let _ = cr.fill();
+        }
+        let color = match icon {
+            NoteIcon::Copy if copied => (0.30, 0.62, 0.36),
+            NoteIcon::Edit if editing => (0.95, 0.58, 0.25),
+            _ => (0.42, 0.44, 0.53),
+        };
+        cr.set_source_rgb(color.0, color.1, color.2);
+        cr.set_line_width(1.7);
+        cr.set_line_cap(cairo::LineCap::Round);
+        cr.set_line_join(cairo::LineJoin::Round);
+        match icon {
+            NoteIcon::Copy => {
+                if copied {
+                    cr.move_to(x + 5.0, y + 10.5);
+                    cr.line_to(x + 8.5, y + 14.0);
+                    cr.line_to(x + 15.5, y + 6.0);
+                    let _ = cr.stroke();
+                } else {
+                    rounded(cr, x + 6.5, y + 3.5, 9.5, 10.5, 2.0);
+                    let _ = cr.stroke();
+                    rounded(cr, x + 3.5, y + 6.5, 9.5, 10.5, 2.0);
+                    let _ = cr.stroke();
+                }
+            }
+            NoteIcon::Edit => {
+                cr.move_to(x + 4.0, y + 16.0);
+                cr.line_to(x + 5.3, y + 11.8);
+                cr.line_to(x + 13.8, y + 3.3);
+                cr.line_to(x + 16.7, y + 6.2);
+                cr.line_to(x + 8.2, y + 14.7);
+                cr.close_path();
+                let _ = cr.stroke();
+                cr.move_to(x + 5.3, y + 11.8);
+                cr.line_to(x + 8.2, y + 14.7);
+                let _ = cr.stroke();
+            }
+            NoteIcon::Palette => {
+                cr.arc(
+                    x + NOTE_ICON_SIDE / 2.0,
+                    y + NOTE_ICON_SIDE / 2.0,
+                    7.0,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
+                let _ = cr.stroke();
+                let (red, green, blue) = color_components(note_color);
+                cr.set_source_rgb(red, green, blue);
+                cr.arc(
+                    x + NOTE_ICON_SIDE / 2.0,
+                    y + NOTE_ICON_SIDE / 2.0,
+                    4.0,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
+                let _ = cr.fill_preserve();
+                cr.set_source_rgba(0.05, 0.05, 0.08, 0.22);
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+            }
+        }
+    }
+}
+
+fn spawn_palette(
+    anchor_x: i32,
+    anchor_y: i32,
+    selected: (u8, u8, u8),
+    on_pick: Rc<dyn Fn((u8, u8, u8))>,
+) -> gtk::Window {
+    let (ww, wh) = palette_size();
+    let window = gtk::Window::new(gtk::WindowType::Popup);
+    prepare_floating(&window, false, 12);
+    window.set_title("flamenote");
+    window.set_default_size(ww, wh);
+
+    let events = gtk::EventBox::new();
+    events.set_size_request(ww, wh);
+    events.set_visible_window(true);
+    events.set_app_paintable(true);
+    use_rgba(&events);
+    events.connect_realize(|widget| {
+        if let Some(gdk_win) = widget.window() {
+            punch_transparency(&gdk_win);
+            gdk_win.set_events(
+                gdk_win.events()
+                    | EventMask::BUTTON_PRESS_MASK
+                    | EventMask::POINTER_MOTION_MASK
+                    | EventMask::LEAVE_NOTIFY_MASK,
+            );
+        }
+    });
+    events.add_events(
+        EventMask::BUTTON_PRESS_MASK
+            | EventMask::POINTER_MOTION_MASK
+            | EventMask::LEAVE_NOTIFY_MASK,
+    );
+
+    let selected = Rc::new(Cell::new(selected));
+    let hovered = Rc::new(Cell::new(None::<usize>));
+    let draw_selected = selected.clone();
+    let draw_hovered = hovered.clone();
+    events.connect_draw(move |widget, cr| {
+        let alloc = widget.allocation();
+        paint_palette(
+            cr,
+            alloc.width() as f64,
+            alloc.height() as f64,
+            draw_selected.get(),
+            draw_hovered.get(),
+        );
+        glib::Propagation::Stop
+    });
+
+    let motion_hovered = hovered.clone();
+    events.connect_motion_notify_event(move |widget, event| {
+        let (x, y) = event.position();
+        let next = palette_index_at(x, y);
+        if next != motion_hovered.get() {
+            motion_hovered.set(next);
+            widget.queue_draw();
+        }
+        let cursor = if next.is_some() {
+            gdk::CursorType::Hand1
+        } else {
+            gdk::CursorType::Arrow
+        };
+        if let (Some(win), Some(display)) = (widget.window(), gdk::Display::default()) {
+            if let Some(cursor) = gdk::Cursor::for_display(&display, cursor) {
+                win.set_cursor(Some(&cursor));
+            }
+        }
+        glib::Propagation::Proceed
+    });
+
+    let leave_hovered = hovered.clone();
+    events.connect_leave_notify_event(move |widget, _| {
+        if leave_hovered.get().is_some() {
+            leave_hovered.set(None);
+            widget.queue_draw();
+        }
+        glib::Propagation::Proceed
+    });
+
+    let click_selected = selected.clone();
+    let click_window = window.clone();
+    events.connect_button_press_event(move |_widget, event| {
+        if event.button() != 1 || event.event_type() != gdk::EventType::ButtonPress {
+            return glib::Propagation::Proceed;
+        }
+        let (x, y) = event.position();
+        if let Some(index) = palette_index_at(x, y) {
+            let color = NOTE_COLORS[index];
+            click_selected.set(color);
+            on_pick(color);
+            click_window.close();
+            return glib::Propagation::Stop;
+        }
+        click_window.close();
+        glib::Propagation::Stop
+    });
+
+    window.add(&events);
+    let (x, y) = place_near(anchor_x, anchor_y, ww, wh);
+    window.move_(x, y);
+    window.show_all();
+    if let Some(gdk_win) = window.window() {
+        select_pointer_events(&gdk_win);
+        gdk_win.raise();
+    }
+    if let Some(gdk_win) = events.window() {
+        select_pointer_events(&gdk_win);
+    }
+    window
 }
 
 fn use_rgba(widget: &impl gtk::prelude::WidgetExt) {
@@ -520,6 +1328,55 @@ fn punch_transparency(window: &gdk::Window) {
     window.set_background_pattern(None);
     let empty = cairo::Region::create();
     window.set_opaque_region(Some(&empty));
+}
+
+/// Janelas override-redirect não recebem foco pelo gerenciador de janelas; o
+/// foco do X11 é pedido diretamente para o servidor.
+fn focus_window(window: &gdk::Window) -> Option<u32> {
+    use glib::translate::ToGlibPtr;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ConnectionExt;
+    use x11rb::wrapper::ConnectionExt as _;
+
+    let xid = unsafe { gdk_x11_window_get_xid(window.to_glib_none().0) };
+    if xid == 0 {
+        return None;
+    }
+    let Ok((conn, _)) = x11rb::connect(None) else {
+        return None;
+    };
+    let previous = conn
+        .get_input_focus()
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.focus)
+        .filter(|focus| *focus > 1);
+    let _ = conn.set_input_focus(
+        x11rb::protocol::xproto::InputFocus::PARENT,
+        xid as u32,
+        x11rb::CURRENT_TIME,
+    );
+    let _ = conn.flush();
+    let _ = conn.sync();
+    previous
+}
+
+fn restore_focus(window: u32) {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::ConnectionExt;
+
+    if let Ok((conn, _)) = x11rb::connect(None) {
+        let _ = conn.set_input_focus(
+            x11rb::protocol::xproto::InputFocus::PARENT,
+            window,
+            x11rb::CURRENT_TIME,
+        );
+        let _ = conn.flush();
+    }
+}
+
+extern "C" {
+    fn gdk_x11_window_get_xid(window: *mut gdk::ffi::GdkWindow) -> libc::c_ulong;
 }
 
 /// Sem compositor, alfa vira preto. A máscara recorta o cartão arredondado.
@@ -582,6 +1439,46 @@ fn rounded_inset(row: i32, height: i32, radius: i32) -> i32 {
     } else {
         (radius as f64 - remain.sqrt()).ceil() as i32
     }
+}
+
+/// O bilhete é uma janela flutuante gerenciada pelo WM, para pertencer a um
+/// workspace e poder ser movido pelos atalhos do gerenciador.
+fn prepare_note(window: &gtk::Window, corner: i32) {
+    window.set_decorated(false);
+    window.set_skip_taskbar_hint(true);
+    window.set_skip_pager_hint(true);
+    window.set_keep_above(true);
+    window.set_accept_focus(true);
+    window.set_focus_on_map(false);
+    window.set_app_paintable(true);
+    window.set_type_hint(gdk::WindowTypeHint::Utility);
+    if let Some(screen) = gtk::prelude::WidgetExt::screen(window).or_else(gdk::Screen::default) {
+        if let Some(visual) = screen.rgba_visual() {
+            window.set_visual(Some(&visual));
+        }
+        let shaped = window.clone();
+        screen.connect_composited_changed(move |_| {
+            apply_rounded_shape(&shaped, SHADOW as i32, corner);
+        });
+    }
+    window.connect_realize(move |widget| {
+        if let Some(gdk_win) = widget.window() {
+            gdk_win.set_accept_focus(true);
+            punch_transparency(&gdk_win);
+            select_pointer_events(&gdk_win);
+        }
+        apply_rounded_shape(widget, SHADOW as i32, corner);
+    });
+    window.connect_size_allocate(move |widget, _| {
+        apply_rounded_shape(widget, SHADOW as i32, corner);
+    });
+    window.connect_screen_changed(|widget, _| {
+        if let Some(screen) = gtk::prelude::WidgetExt::screen(widget) {
+            if let Some(visual) = screen.rgba_visual() {
+                widget.set_visual(Some(&visual));
+            }
+        }
+    });
 }
 
 fn prepare_floating(window: &gtk::Window, accept_focus: bool, corner: i32) {
@@ -1553,7 +2450,7 @@ fn paint_llm_icon(cr: &cairo::Context, x: f64, y: f64, side: f64, enabled: bool)
     }
 }
 
-fn paint_note(cr: &cairo::Context, w: f64, h: f64) {
+fn paint_note(cr: &cairo::Context, w: f64, h: f64, color: (u8, u8, u8)) {
     cr.set_operator(cairo::Operator::Source);
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
     let _ = cr.paint();
@@ -1578,7 +2475,8 @@ fn paint_note(cr: &cairo::Context, w: f64, h: f64) {
     let card_w = (w - SHADOW * 2.0).max(1.0);
     let card_h = (h - SHADOW * 2.0).max(1.0);
     rounded(cr, card_x, card_y, card_w, card_h, 16.0);
-    cr.set_source_rgb(1.0, 1.0, 1.0);
+    let (red, green, blue) = color_components(color);
+    cr.set_source_rgb(red, green, blue);
     let _ = cr.fill_preserve();
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.08);
     cr.set_line_width(1.0);

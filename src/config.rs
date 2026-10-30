@@ -9,6 +9,12 @@ use std::time::SystemTime;
 pub const DEFAULT_HOTKEY: &str = "Super+Shift+N";
 pub const DEFAULT_COPIES_DIR: &str = "~/copias";
 pub const MAX_QUERIES: usize = 3;
+pub const DEFAULT_NOTE_WIDTH: i32 = 320;
+pub const DEFAULT_NOTE_HEIGHT: i32 = 220;
+pub const MIN_NOTE_WIDTH: i32 = 220;
+pub const MIN_NOTE_HEIGHT: i32 = 160;
+pub const MAX_NOTE_WIDTH: i32 = 1600;
+pub const MAX_NOTE_HEIGHT: i32 = 1200;
 
 const SHIFT: u16 = 1 << 0;
 const CONTROL: u16 = 1 << 2;
@@ -59,12 +65,38 @@ impl Default for Query {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NoteConfig {
+    pub width: i32,
+    pub height: i32,
+}
+
+impl Default for NoteConfig {
+    fn default() -> Self {
+        Self {
+            width: DEFAULT_NOTE_WIDTH,
+            height: DEFAULT_NOTE_HEIGHT,
+        }
+    }
+}
+
+impl NoteConfig {
+    pub fn clamped(&self) -> Self {
+        Self {
+            width: self.width.clamp(MIN_NOTE_WIDTH, MAX_NOTE_WIDTH),
+            height: self.height.clamp(MIN_NOTE_HEIGHT, MAX_NOTE_HEIGHT),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub path: PathBuf,
     pub hotkey: Hotkey,
     /// Pasta onde a ferramenta de arquivo grava as cópias, já expandida.
     pub copies_dir: PathBuf,
+    pub note: NoteConfig,
     pub llm: LlmConfig,
     pub queries: Vec<Query>,
     pub modified: Option<SystemTime>,
@@ -86,6 +118,7 @@ impl std::error::Error for ConfigError {}
 struct FileConfig {
     hotkey: Option<String>,
     copies_dir: Option<String>,
+    note: NoteConfig,
     llm: LlmConfig,
     queries: Vec<Query>,
 }
@@ -94,6 +127,7 @@ struct FileConfig {
 struct FileConfigOut<'a> {
     hotkey: &'a str,
     copies_dir: &'a str,
+    note: &'a NoteConfig,
     llm: &'a LlmConfig,
     queries: &'a [Query],
 }
@@ -103,6 +137,7 @@ const CONFIG_HEADER: &str = "\
 # Modificadores: Ctrl, Alt, Shift, Super.\n\
 # Exemplos: \"Super+Shift+N\", \"Ctrl+Alt+N\", \"F9\"\n\
 # copies_dir aceita caminho absoluto ou começando com ~.\n\
+# [note] define o tamanho inicial do balão (largura e altura em pixels).\n\
 # Até três [[queries]]; destination = \"file\" ou \"clipboard\".\n";
 
 pub fn config_path() -> PathBuf {
@@ -222,6 +257,7 @@ pub fn save_config(
     path: &Path,
     hotkey: &Hotkey,
     copies_dir: &Path,
+    note: &NoteConfig,
     llm: &LlmConfig,
     queries: &[Query],
 ) -> std::io::Result<()> {
@@ -229,10 +265,12 @@ pub fn save_config(
         fs::create_dir_all(parent)?;
     }
     let copies_dir = display_path(copies_dir);
+    let note = note.clamped();
     let queries = &queries[..queries.len().min(MAX_QUERIES)];
     let file = FileConfigOut {
         hotkey: &hotkey.display,
         copies_dir: &copies_dir,
+        note: &note,
         llm,
         queries,
     };
@@ -355,7 +393,7 @@ pub fn parse_hotkey(raw: &str) -> Result<Hotkey, ConfigError> {
 
 fn read_path(path: &Path) -> Config {
     let modified = mtime(path);
-    let (hotkey, copies_dir, llm, queries) = match fs::read_to_string(path) {
+    let (hotkey, copies_dir, note, llm, queries) = match fs::read_to_string(path) {
         Ok(text) => match toml::from_str::<FileConfig>(&text) {
             Ok(file) => {
                 let hotkey = file
@@ -378,6 +416,7 @@ fn read_path(path: &Path) -> Config {
                     .map(expand_path)
                     .filter(|dir| !dir.as_os_str().is_empty())
                     .unwrap_or_else(default_copies_dir);
+                let note = file.note.clamped();
                 let llm = LlmConfig {
                     base_url: file.llm.base_url.trim().to_string(),
                     model: file.llm.model.trim().to_string(),
@@ -393,7 +432,7 @@ fn read_path(path: &Path) -> Config {
                         query
                     })
                     .collect();
-                (hotkey, copies_dir, llm, queries)
+                (hotkey, copies_dir, note, llm, queries)
             }
             Err(err) => {
                 eprintln!(
@@ -403,6 +442,7 @@ fn read_path(path: &Path) -> Config {
                 (
                     parse_hotkey(DEFAULT_HOTKEY).expect("atalho padrão"),
                     default_copies_dir(),
+                    NoteConfig::default(),
                     LlmConfig::default(),
                     Vec::new(),
                 )
@@ -416,6 +456,7 @@ fn read_path(path: &Path) -> Config {
             (
                 parse_hotkey(DEFAULT_HOTKEY).expect("atalho padrão"),
                 default_copies_dir(),
+                NoteConfig::default(),
                 LlmConfig::default(),
                 Vec::new(),
             )
@@ -425,6 +466,7 @@ fn read_path(path: &Path) -> Config {
         path: path.to_path_buf(),
         hotkey,
         copies_dir,
+        note,
         llm,
         queries,
         modified,
@@ -437,6 +479,7 @@ fn write_default(path: &Path) -> std::io::Result<()> {
         path,
         &hotkey,
         &default_copies_dir(),
+        &NoteConfig::default(),
         &LlmConfig::default(),
         &[],
     )
@@ -570,6 +613,10 @@ mod tests {
         let path = dir.join("config.toml");
         let hotkey = parse_hotkey("Ctrl+Alt+N").unwrap();
         let copies = dir.join("copias");
+        let note = NoteConfig {
+            width: 480,
+            height: 260,
+        };
         let llm = LlmConfig {
             base_url: "http://localhost:11434".into(),
             model: "qwen3:14b".into(),
@@ -585,10 +632,11 @@ mod tests {
                 destination: QueryDestination::Clipboard,
             },
         ];
-        save_config(&path, &hotkey, &copies, &llm, &queries).unwrap();
+        save_config(&path, &hotkey, &copies, &note, &llm, &queries).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.hotkey, hotkey);
         assert_eq!(loaded.copies_dir, copies);
+        assert_eq!(loaded.note, note);
         assert_eq!(loaded.llm, llm);
         assert_eq!(loaded.queries, queries);
         let _ = fs::remove_dir_all(&dir);
@@ -638,6 +686,18 @@ prompt = "quarta"
         assert_eq!(loaded.queries[1].prompt, "segunda");
         assert_eq!(loaded.queries[1].destination, QueryDestination::Clipboard);
         assert_eq!(loaded.queries[2].prompt, "terceira");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_size_is_clamped() {
+        let dir = std::env::temp_dir().join(format!("flamenote-note-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, "[note]\nwidth = 10\nheight = 99999\n").unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.note.width, MIN_NOTE_WIDTH);
+        assert_eq!(loaded.note.height, MAX_NOTE_HEIGHT);
         let _ = fs::remove_dir_all(&dir);
     }
 
