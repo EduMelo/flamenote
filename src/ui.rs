@@ -8,7 +8,11 @@ use std::rc::Rc;
 
 const SHADOW: f64 = 16.0;
 const CARD_PAD: f64 = 16.0;
-const TOOLBOX: i32 = 96;
+const TOOLBOX_W: i32 = 146;
+const TOOLBOX_H: i32 = 96;
+const BUTTON_GAP: f64 = 10.0;
+const BUTTON_NOTE: usize = 0;
+const BUTTON_FILE: usize = 1;
 
 pub struct Toolbox {
     window: gtk::Window,
@@ -60,12 +64,33 @@ pub fn install_style() {
             border-color: #fab387;
             background-color: #fff8f3;
         }
+        window.flamenote-settings entry.path {
+            background-image: none;
+            background-color: #ffffff;
+            color: #1e1e2e;
+            border: 1px solid #d5d3dc;
+            border-radius: 8px;
+            padding: 8px 10px;
+            font-size: 15px;
+        }
         window.flamenote-settings label.hint {
             color: #6c7086;
             font-size: 12px;
         }
         window.flamenote-settings label.hint.error {
             color: #c45c4a;
+        }
+        menu {
+            background-color: #f7f5f8;
+            color: #1e1e2e;
+            border: 1px solid #d5d3dc;
+        }
+        menuitem:hover {
+            background-color: #ebe7ee;
+        }
+        separator {
+            background-color: #d5d3dc;
+            min-height: 1px;
         }
     "#;
     if provider.load_from_data(css).is_err() {
@@ -80,11 +105,11 @@ pub fn install_style() {
     }
 }
 
-pub fn build_toolbox(on_activate: Rc<dyn Fn()>) -> Toolbox {
+pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
     let window = gtk::Window::new(gtk::WindowType::Popup);
     prepare_floating(&window, false, 18);
     window.set_title("flamenote");
-    window.set_default_size(TOOLBOX, TOOLBOX);
+    window.set_default_size(TOOLBOX_W, TOOLBOX_H);
     window.set_resizable(false);
     window.add_events(
         EventMask::BUTTON_PRESS_MASK
@@ -93,9 +118,9 @@ pub fn build_toolbox(on_activate: Rc<dyn Fn()>) -> Toolbox {
     );
 
     let enabled = Rc::new(Cell::new(false));
-    let hover = Rc::new(Cell::new(false));
+    let hover = Rc::new(Cell::new(None::<usize>));
     let area = gtk::EventBox::new();
-    area.set_size_request(TOOLBOX, TOOLBOX);
+    area.set_size_request(TOOLBOX_W, TOOLBOX_H);
     area.set_visible_window(true);
     area.set_app_paintable(true);
     use_rgba(&area);
@@ -131,12 +156,12 @@ pub fn build_toolbox(on_activate: Rc<dyn Fn()>) -> Toolbox {
     area.connect_motion_notify_event(move |widget, event| {
         let (x, y) = event.position();
         let alloc = widget.allocation();
-        let inside = point_in_button(x, y, alloc.width() as f64, alloc.height() as f64);
-        let next = inside && enabled_motion.get();
+        let inside = button_at(x, y, alloc.width() as f64, alloc.height() as f64);
+        let next = if enabled_motion.get() { inside } else { None };
         if next != hover_motion.get() {
             hover_motion.set(next);
             widget.queue_draw();
-            let cursor = if next {
+            let cursor = if next.is_some() {
                 gdk::CursorType::Hand1
             } else {
                 gdk::CursorType::Arrow
@@ -152,26 +177,35 @@ pub fn build_toolbox(on_activate: Rc<dyn Fn()>) -> Toolbox {
 
     let hover_leave = hover.clone();
     area.connect_leave_notify_event(move |widget, _| {
-        if hover_leave.get() {
-            hover_leave.set(false);
+        if hover_leave.get().is_some() {
+            hover_leave.set(None);
             widget.queue_draw();
         }
         glib::Propagation::Proceed
     });
 
     let enabled_click = enabled.clone();
+    let note_click = on_note.clone();
+    let file_click = on_file.clone();
     area.connect_button_press_event(move |widget, event| {
         if event.button() != 1 || event.event_type() != gdk::EventType::ButtonPress {
             return glib::Propagation::Proceed;
         }
+        if !enabled_click.get() {
+            return glib::Propagation::Proceed;
+        }
         let (x, y) = event.position();
         let alloc = widget.allocation();
-        if enabled_click.get() && point_in_button(x, y, alloc.width() as f64, alloc.height() as f64)
-        {
-            on_activate();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+        match button_at(x, y, alloc.width() as f64, alloc.height() as f64) {
+            Some(BUTTON_NOTE) => {
+                note_click();
+                glib::Propagation::Stop
+            }
+            Some(BUTTON_FILE) => {
+                file_click();
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
         }
     });
 
@@ -198,7 +232,7 @@ impl Toolbox {
     }
 
     pub fn show_near(&self, anchor_x: i32, anchor_y: i32) {
-        let (x, y) = place_near(anchor_x, anchor_y, TOOLBOX, TOOLBOX);
+        let (x, y) = place_near(anchor_x, anchor_y, TOOLBOX_W, TOOLBOX_H);
         self.window.move_(x, y);
         self.window.show_all();
         if let Some(win) = self.window.window() {
@@ -605,12 +639,16 @@ fn monitor_at(x: i32, y: i32) -> (i32, i32, i32, i32) {
 const HINT_IDLE: &str = "Clique no campo e pressione as teclas.";
 const HINT_LISTEN: &str = "Pressione o atalho. Esc cancela.";
 const HINT_SAVED: &str = "Atalho salvo.";
+const HINT_DIR_IDLE: &str = "Enter ou sair do campo salva a pasta.";
+const HINT_DIR_SAVED: &str = "Pasta salva.";
 
 pub struct Settings {
     window: gtk::Window,
     field: gtk::Entry,
+    copies_field: gtk::Entry,
     listening: Rc<Cell<bool>>,
     saved: Rc<RefCell<String>>,
+    saved_copies: Rc<RefCell<String>>,
 }
 
 impl Settings {
@@ -630,12 +668,21 @@ impl Settings {
             self.field.select_region(0, 0);
         }
     }
+
+    pub fn set_copies_dir(&self, display: &str) {
+        *self.saved_copies.borrow_mut() = display.to_string();
+        if !self.copies_field.has_focus() {
+            self.copies_field.set_text(display);
+        }
+    }
 }
 
 pub fn build_settings(
     initial: &str,
+    initial_copies_dir: &str,
     on_listen: Rc<dyn Fn(bool)>,
     on_save: Rc<dyn Fn(&Hotkey) -> Result<(), String>>,
+    on_save_copies_dir: Rc<dyn Fn(&str) -> Result<String, String>>,
 ) -> Settings {
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Configurações");
@@ -678,14 +725,37 @@ pub fn build_settings(
     hint.set_max_width_chars(42);
     hint.style_context().add_class("hint");
 
+    let dir_section = gtk::Label::new(Some("Pasta de destino"));
+    dir_section.set_xalign(0.0);
+    dir_section.set_margin_top(8);
+    dir_section.style_context().add_class("section");
+
+    let copies_field = gtk::Entry::new();
+    copies_field.set_text(initial_copies_dir);
+    copies_field.set_editable(true);
+    copies_field.set_width_chars(22);
+    copies_field.set_placeholder_text(Some("~/copias"));
+    copies_field.set_tooltip_text(Some("Pasta onde o texto selecionado é salvo como arquivo"));
+    copies_field.style_context().add_class("path");
+
+    let dir_hint = gtk::Label::new(Some(HINT_DIR_IDLE));
+    dir_hint.set_xalign(0.0);
+    dir_hint.set_line_wrap(true);
+    dir_hint.set_max_width_chars(42);
+    dir_hint.style_context().add_class("hint");
+
     content.add(&title);
     content.add(&section);
     content.add(&field);
     content.add(&hint);
+    content.add(&dir_section);
+    content.add(&copies_field);
+    content.add(&dir_hint);
     window.add(&content);
 
     let listening = Rc::new(Cell::new(false));
     let saved = Rc::new(RefCell::new(initial.to_string()));
+    let saved_copies = Rc::new(RefCell::new(initial_copies_dir.to_string()));
 
     let listening_click = listening.clone();
     let field_click = field.clone();
@@ -788,6 +858,46 @@ pub fn build_settings(
         glib::Propagation::Proceed
     });
 
+    let commit_copies = {
+        let copies_field = copies_field.clone();
+        let dir_hint = dir_hint.clone();
+        let saved_copies = saved_copies.clone();
+        let on_save = on_save_copies_dir.clone();
+        Rc::new(move || {
+            let current = copies_field.text().to_string();
+            let trimmed = current.trim();
+            if trimmed == saved_copies.borrow().trim() {
+                if current != *saved_copies.borrow() {
+                    copies_field.set_text(&saved_copies.borrow());
+                }
+                return;
+            }
+            match on_save(trimmed) {
+                Ok(display) => {
+                    *saved_copies.borrow_mut() = display.clone();
+                    copies_field.set_text(&display);
+                    set_hint(&dir_hint, HINT_DIR_SAVED, false);
+                }
+                Err(message) => set_hint(&dir_hint, &message, true),
+            }
+        }) as Rc<dyn Fn()>
+    };
+
+    let commit_activate = commit_copies.clone();
+    copies_field.connect_activate(move |_| {
+        commit_activate();
+    });
+
+    let commit_focus = commit_copies.clone();
+    copies_field.connect_focus_out_event(move |_, _| {
+        let commit = commit_focus.clone();
+        glib::idle_add_local(move || {
+            commit();
+            glib::ControlFlow::Break
+        });
+        glib::Propagation::Proceed
+    });
+
     let listening_destroy = listening.clone();
     window.connect_destroy(move |_| {
         if listening_destroy.get() {
@@ -799,8 +909,10 @@ pub fn build_settings(
     Settings {
         window,
         field,
+        copies_field,
         listening,
         saved,
+        saved_copies,
     }
 }
 
@@ -815,18 +927,37 @@ mod tests {
             return;
         }
         gtk::init().expect("gtk");
+        // O harness usa uma thread por teste, e o GTK só inicializa numa.
+        let root = gdk::Screen::default()
+            .and_then(|screen| screen.root_window())
+            .expect("raiz");
+        let trigger = crate::menu_trigger(&root, 40, 70, 3, 123_456);
+        assert_eq!(trigger.button(), Some(3));
+        assert_eq!(trigger.time(), 123_456);
+        assert_eq!(trigger.root_coords(), Some((40.0, 70.0)));
+        assert!(trigger.device().is_some());
+        assert!(trigger.window().is_some());
         install_style();
         let saved = Rc::new(RefCell::new(String::new()));
         let saved_cb = saved.clone();
+        let saved_copies = Rc::new(RefCell::new(String::new()));
+        let saved_copies_cb = saved_copies.clone();
         let settings = build_settings(
             "Super+Shift+N",
+            "~/copias",
             Rc::new(|_| {}),
             Rc::new(move |hotkey| {
                 *saved_cb.borrow_mut() = hotkey.display.clone();
                 Ok(())
             }),
+            Rc::new(move |dir| {
+                let display = dir.to_string();
+                *saved_copies_cb.borrow_mut() = display.clone();
+                Ok(display)
+            }),
         );
         assert_eq!(settings.field.text(), "Super+Shift+N");
+        assert_eq!(settings.copies_field.text(), "~/copias");
         let window = settings.window.clone();
         window.show_all();
         let ctx = glib::MainContext::default();
@@ -903,18 +1034,25 @@ fn clamp(value: i32, min: i32, max: i32) -> i32 {
     }
 }
 
-fn button_rect(w: f64, h: f64) -> (f64, f64, f64, f64) {
+fn button_rects(w: f64, h: f64) -> [(f64, f64, f64, f64); 2] {
     let pad = 12.0;
-    let side = (w - SHADOW * 2.0 - pad * 2.0).min(h - SHADOW * 2.0 - pad * 2.0);
-    (SHADOW + pad, SHADOW + pad, side, side)
+    let side =
+        (h - SHADOW * 2.0 - pad * 2.0).min((w - SHADOW * 2.0 - pad * 2.0 - BUTTON_GAP) / 2.0);
+    let bx = SHADOW + pad;
+    let by = SHADOW + pad;
+    [
+        (bx, by, side, side),
+        (bx + side + BUTTON_GAP, by, side, side),
+    ]
 }
 
-fn point_in_button(x: f64, y: f64, w: f64, h: f64) -> bool {
-    let (bx, by, bs, _) = button_rect(w, h);
-    x >= bx && y >= by && x <= bx + bs && y <= by + bs
+fn button_at(x: f64, y: f64, w: f64, h: f64) -> Option<usize> {
+    button_rects(w, h)
+        .iter()
+        .position(|(bx, by, bs, _)| x >= *bx && y >= *by && x <= bx + bs && y <= by + bs)
 }
 
-fn paint_toolbox(cr: &cairo::Context, w: f64, h: f64, enabled: bool, hover: bool) {
+fn paint_toolbox(cr: &cairo::Context, w: f64, h: f64, enabled: bool, hover: Option<usize>) {
     cr.set_operator(cairo::Operator::Source);
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
     let _ = cr.paint();
@@ -941,17 +1079,22 @@ fn paint_toolbox(cr: &cairo::Context, w: f64, h: f64, enabled: bool, hover: bool
     cr.set_line_width(1.0);
     let _ = cr.stroke();
 
-    let (bx, by, bs, _) = button_rect(w, h);
-    rounded(cr, bx, by, bs, bs, 12.0);
-    if enabled && hover {
-        cr.set_source_rgba(0.271, 0.278, 0.353, 1.0);
-    } else if enabled {
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.03);
-    } else {
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.12);
+    for (index, (bx, by, bs, _)) in button_rects(w, h).into_iter().enumerate() {
+        rounded(cr, bx, by, bs, bs, 12.0);
+        if enabled && hover == Some(index) {
+            cr.set_source_rgba(0.271, 0.278, 0.353, 1.0);
+        } else if enabled {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.03);
+        } else {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.12);
+        }
+        let _ = cr.fill();
+        match index {
+            BUTTON_NOTE => paint_tool_icon(cr, bx, by, bs, enabled),
+            BUTTON_FILE => paint_save_icon(cr, bx, by, bs, enabled),
+            _ => {}
+        }
     }
-    let _ = cr.fill();
-    paint_tool_icon(cr, bx, by, bs, enabled);
 }
 
 fn paint_tool_icon(cr: &cairo::Context, x: f64, y: f64, side: f64, enabled: bool) {
@@ -981,6 +1124,40 @@ fn paint_tool_icon(cr: &cairo::Context, x: f64, y: f64, side: f64, enabled: bool
         cr.rectangle(px + pw * 0.14, ly, lw, line_h);
         let _ = cr.fill();
     }
+}
+
+fn paint_save_icon(cr: &cairo::Context, x: f64, y: f64, side: f64, enabled: bool) {
+    let paper = if enabled {
+        (0.980, 0.702, 0.529)
+    } else {
+        (0.345, 0.357, 0.439)
+    };
+    let ink = if enabled {
+        (0.118, 0.118, 0.180)
+    } else {
+        (0.192, 0.196, 0.267)
+    };
+    let px = x + side * 0.23;
+    let py = y + side * 0.21;
+    let ps = side * 0.54;
+
+    rounded(cr, px, py, ps, ps, 4.0);
+    cr.set_source_rgb(paper.0, paper.1, paper.2);
+    let _ = cr.fill();
+
+    cr.set_source_rgb(ink.0, ink.1, ink.2);
+    cr.rectangle(px + ps * 0.29, py + ps * 0.10, ps * 0.42, ps * 0.20);
+    let _ = cr.fill();
+
+    rounded(
+        cr,
+        px + ps * 0.20,
+        py + ps * 0.54,
+        ps * 0.60,
+        ps * 0.32,
+        2.0,
+    );
+    let _ = cr.fill();
 }
 
 fn paint_note(cr: &cairo::Context, w: f64, h: f64) {

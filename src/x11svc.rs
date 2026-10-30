@@ -12,6 +12,7 @@
 use crate::config::{self, Config, Hotkey};
 use std::collections::HashSet;
 use std::os::fd::AsRawFd;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
@@ -50,11 +51,21 @@ const XEMBED_EMBEDDED_NOTIFY: u32 = 0;
 const SYSTEM_TRAY_REQUEST_DOCK: u32 = 0;
 
 pub enum AppEvent {
-    ShowToolbox { x: i32, y: i32, text: String },
+    ShowToolbox {
+        x: i32,
+        y: i32,
+        text: String,
+    },
     HideToolbox,
     Selection(Option<String>),
-    TrayMenu { x: i32, y: i32 },
+    TrayMenu {
+        x: i32,
+        y: i32,
+        button: u32,
+        time: u32,
+    },
     HotkeyChanged(String),
+    CopiesDirChanged(PathBuf),
 }
 
 pub enum Command {
@@ -885,6 +896,8 @@ impl X11 {
 
     fn apply_loaded(&mut self, next: Config, force_grab: bool) -> XResult<()> {
         let changed = next.hotkey != self.config.hotkey;
+        let copies_changed = next.copies_dir != self.config.copies_dir;
+        let copies_dir = next.copies_dir.clone();
         if changed && !self.hotkey_paused {
             self.ungrab_codes(&self.hotkey_codes.clone(), self.hotkey.modifiers)?;
         }
@@ -901,6 +914,9 @@ impl X11 {
             let _ = self
                 .to_gtk
                 .send(AppEvent::HotkeyChanged(self.hotkey.display.clone()));
+        }
+        if copies_changed {
+            let _ = self.to_gtk.send(AppEvent::CopiesDirChanged(copies_dir));
         }
         if force_grab {
             self.hotkey_paused = false;
@@ -960,9 +976,17 @@ impl X11 {
             Event::ButtonPress(ev) if ev.event == self.icon => match ev.detail {
                 1 => self.toggle()?,
                 2 | 3 => {
+                    // O ButtonPress deixa um grab implícito nesta conexão. O menu
+                    // do GTK usa outra e, se o ponteiro continuar preso, cancela
+                    // a abertura sem aviso.
+                    if let Ok(cookie) = self.conn.ungrab_pointer(ev.time) {
+                        let _ = cookie.check();
+                    }
                     let _ = self.to_gtk.send(AppEvent::TrayMenu {
                         x: ev.root_x as i32,
                         y: ev.root_y as i32,
+                        button: u32::from(ev.detail),
+                        time: ev.time,
                     });
                 }
                 _ => {}
