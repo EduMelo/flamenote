@@ -1,12 +1,14 @@
 //! Atalho global e leitura de `config.toml`.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 pub const DEFAULT_HOTKEY: &str = "Super+Shift+N";
 pub const DEFAULT_COPIES_DIR: &str = "~/copias";
+pub const MAX_QUERIES: usize = 3;
 
 const SHIFT: u16 = 1 << 0;
 const CONTROL: u16 = 1 << 2;
@@ -25,12 +27,46 @@ pub struct Hotkey {
     pub display: String,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmConfig {
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueryDestination {
+    File,
+    #[default]
+    Clipboard,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Query {
+    pub prompt: String,
+    pub destination: QueryDestination,
+}
+
+impl Default for Query {
+    fn default() -> Self {
+        Self {
+            prompt: String::new(),
+            destination: QueryDestination::Clipboard,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub path: PathBuf,
     pub hotkey: Hotkey,
     /// Pasta onde a ferramenta de arquivo grava as cópias, já expandida.
     pub copies_dir: PathBuf,
+    pub llm: LlmConfig,
+    pub queries: Vec<Query>,
     pub modified: Option<SystemTime>,
 }
 
@@ -45,11 +81,29 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
+#[serde(default)]
 struct FileConfig {
     hotkey: Option<String>,
     copies_dir: Option<String>,
+    llm: LlmConfig,
+    queries: Vec<Query>,
 }
+
+#[derive(Serialize)]
+struct FileConfigOut<'a> {
+    hotkey: &'a str,
+    copies_dir: &'a str,
+    llm: &'a LlmConfig,
+    queries: &'a [Query],
+}
+
+const CONFIG_HEADER: &str = "\
+# Atalho global do flamenote.\n\
+# Modificadores: Ctrl, Alt, Shift, Super.\n\
+# Exemplos: \"Super+Shift+N\", \"Ctrl+Alt+N\", \"F9\"\n\
+# copies_dir aceita caminho absoluto ou começando com ~.\n\
+# Até três [[queries]]; destination = \"file\" ou \"clipboard\".\n";
 
 pub fn config_path() -> PathBuf {
     if let Some(path) = std::env::var_os("FLAMENOTE_CONFIG") {
@@ -164,27 +218,44 @@ pub fn hotkey_from_capture(mods: CaptureMods, key_name: &str) -> Result<Hotkey, 
     parse_hotkey(&parts.join("+"))
 }
 
-pub fn save_config(path: &Path, hotkey: &Hotkey, copies_dir: &Path) -> std::io::Result<()> {
+pub fn save_config(
+    path: &Path,
+    hotkey: &Hotkey,
+    copies_dir: &Path,
+    llm: &LlmConfig,
+    queries: &[Query],
+) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let hotkey = quote(&hotkey.display);
-    let copies_dir = quote(&display_path(copies_dir));
-    let body = format!(
-        "# Atalho global do flamenote.\n\
-         # Modificadores: Ctrl, Alt, Shift, Super.\n\
-         # Exemplos: \"Super+Shift+N\", \"Ctrl+Alt+N\", \"F9\"\n\
-         hotkey = \"{hotkey}\"\n\
-         # Pasta onde o texto selecionado é salvo como arquivo.\n\
-         # Aceita caminho absoluto ou começando com ~.\n\
-         copies_dir = \"{copies_dir}\"\n"
-    );
-    fs::write(path, body)
+    let copies_dir = display_path(copies_dir);
+    let queries = &queries[..queries.len().min(MAX_QUERIES)];
+    let file = FileConfigOut {
+        hotkey: &hotkey.display,
+        copies_dir: &copies_dir,
+        llm,
+        queries,
+    };
+    let body =
+        toml::to_string(&file).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+    fs::write(path, format!("{CONFIG_HEADER}\n{body}"))?;
+    restrict_permissions(path);
+    Ok(())
 }
 
-fn quote(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+#[cfg(unix)]
+fn restrict_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o600);
+        let _ = fs::set_permissions(path, permissions);
+    }
 }
+
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &Path) {}
 
 pub fn default_copies_dir() -> PathBuf {
     expand_path(DEFAULT_COPIES_DIR)
@@ -284,7 +355,7 @@ pub fn parse_hotkey(raw: &str) -> Result<Hotkey, ConfigError> {
 
 fn read_path(path: &Path) -> Config {
     let modified = mtime(path);
-    let (hotkey, copies_dir) = match fs::read_to_string(path) {
+    let (hotkey, copies_dir, llm, queries) = match fs::read_to_string(path) {
         Ok(text) => match toml::from_str::<FileConfig>(&text) {
             Ok(file) => {
                 let hotkey = file
@@ -307,7 +378,22 @@ fn read_path(path: &Path) -> Config {
                     .map(expand_path)
                     .filter(|dir| !dir.as_os_str().is_empty())
                     .unwrap_or_else(default_copies_dir);
-                (hotkey, copies_dir)
+                let llm = LlmConfig {
+                    base_url: file.llm.base_url.trim().to_string(),
+                    model: file.llm.model.trim().to_string(),
+                    api_key: file.llm.api_key.trim().to_string(),
+                };
+                let queries = file
+                    .queries
+                    .into_iter()
+                    .filter(|query| !query.prompt.trim().is_empty())
+                    .take(MAX_QUERIES)
+                    .map(|mut query| {
+                        query.prompt = query.prompt.trim().to_string();
+                        query
+                    })
+                    .collect();
+                (hotkey, copies_dir, llm, queries)
             }
             Err(err) => {
                 eprintln!(
@@ -317,6 +403,8 @@ fn read_path(path: &Path) -> Config {
                 (
                     parse_hotkey(DEFAULT_HOTKEY).expect("atalho padrão"),
                     default_copies_dir(),
+                    LlmConfig::default(),
+                    Vec::new(),
                 )
             }
         },
@@ -328,6 +416,8 @@ fn read_path(path: &Path) -> Config {
             (
                 parse_hotkey(DEFAULT_HOTKEY).expect("atalho padrão"),
                 default_copies_dir(),
+                LlmConfig::default(),
+                Vec::new(),
             )
         }
     };
@@ -335,13 +425,21 @@ fn read_path(path: &Path) -> Config {
         path: path.to_path_buf(),
         hotkey,
         copies_dir,
+        llm,
+        queries,
         modified,
     }
 }
 
 fn write_default(path: &Path) -> std::io::Result<()> {
     let hotkey = parse_hotkey(DEFAULT_HOTKEY).expect("atalho padrão");
-    save_config(path, &hotkey, &default_copies_dir())
+    save_config(
+        path,
+        &hotkey,
+        &default_copies_dir(),
+        &LlmConfig::default(),
+        &[],
+    )
 }
 
 fn mtime(path: &Path) -> Option<SystemTime> {
@@ -472,10 +570,74 @@ mod tests {
         let path = dir.join("config.toml");
         let hotkey = parse_hotkey("Ctrl+Alt+N").unwrap();
         let copies = dir.join("copias");
-        save_config(&path, &hotkey, &copies).unwrap();
+        let llm = LlmConfig {
+            base_url: "http://localhost:11434".into(),
+            model: "qwen3:14b".into(),
+            api_key: String::new(),
+        };
+        let queries = vec![
+            Query {
+                prompt: "Resuma:".into(),
+                destination: QueryDestination::File,
+            },
+            Query {
+                prompt: "Traduza:".into(),
+                destination: QueryDestination::Clipboard,
+            },
+        ];
+        save_config(&path, &hotkey, &copies, &llm, &queries).unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.hotkey, hotkey);
         assert_eq!(loaded.copies_dir, copies);
+        assert_eq!(loaded.llm, llm);
+        assert_eq!(loaded.queries, queries);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn queries_are_trimmed_and_limited_to_three() {
+        let dir = std::env::temp_dir().join(format!("flamenote-queries-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            &path,
+            r#"
+hotkey = "Super+Shift+N"
+copies_dir = "~/copias"
+
+[llm]
+base_url = " http://localhost:11434 "
+model = " qwen3:14b "
+api_key = ""
+
+[[queries]]
+prompt = "  primeira  "
+destination = "file"
+
+[[queries]]
+prompt = "segunda"
+
+[[queries]]
+prompt = "   "
+
+[[queries]]
+prompt = "terceira"
+destination = "clipboard"
+
+[[queries]]
+prompt = "quarta"
+"#,
+        )
+        .unwrap();
+        let loaded = load_from(&path);
+        assert_eq!(loaded.llm.base_url, "http://localhost:11434");
+        assert_eq!(loaded.llm.model, "qwen3:14b");
+        assert_eq!(loaded.queries.len(), 3);
+        assert_eq!(loaded.queries[0].prompt, "primeira");
+        assert_eq!(loaded.queries[0].destination, QueryDestination::File);
+        assert_eq!(loaded.queries[1].prompt, "segunda");
+        assert_eq!(loaded.queries[1].destination, QueryDestination::Clipboard);
+        assert_eq!(loaded.queries[2].prompt, "terceira");
         let _ = fs::remove_dir_all(&dir);
     }
 

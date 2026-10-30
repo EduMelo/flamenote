@@ -1,6 +1,6 @@
 //! Caixa de ferramentas, bilhetes flutuantes e a janela de configuração.
 
-use crate::config::{self, CaptureMods, Hotkey};
+use crate::config::{self, CaptureMods, Hotkey, LlmConfig, Query, QueryDestination, MAX_QUERIES};
 use gdk::EventMask;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -8,16 +8,43 @@ use std::rc::Rc;
 
 const SHADOW: f64 = 16.0;
 const CARD_PAD: f64 = 16.0;
-const TOOLBOX_W: i32 = 146;
 const TOOLBOX_H: i32 = 96;
+const BUTTON_SIDE: f64 = 40.0;
 const BUTTON_GAP: f64 = 10.0;
-const BUTTON_NOTE: usize = 0;
-const BUTTON_FILE: usize = 1;
+const BUTTON_PAD: f64 = 12.0;
+
+const TOOLTIP_DISABLED: &str = "Nenhum texto selecionado na janela em foco";
+const TOOLTIP_ENABLED: &str = "Usar o texto selecionado";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolIcon {
+    Note,
+    File,
+    Llm,
+}
+
+#[derive(Clone)]
+pub struct ToolAction {
+    pub icon: ToolIcon,
+    pub tooltip: String,
+    pub run: Rc<dyn Fn()>,
+}
+
+impl ToolAction {
+    pub fn new(icon: ToolIcon, tooltip: impl Into<String>, run: impl Fn() + 'static) -> Self {
+        Self {
+            icon,
+            tooltip: tooltip.into(),
+            run: Rc::new(run),
+        }
+    }
+}
 
 pub struct Toolbox {
     window: gtk::Window,
     enabled: Rc<Cell<bool>>,
     area: gtk::EventBox,
+    width: i32,
 }
 
 pub fn install_style() {
@@ -73,6 +100,21 @@ pub fn install_style() {
             padding: 8px 10px;
             font-size: 15px;
         }
+        window.flamenote-settings label.field {
+            color: #6c7086;
+            font-size: 13px;
+        }
+        window.flamenote-settings scrolledwindow.prompt {
+            background-color: #ffffff;
+            border: 1px solid #d5d3dc;
+            border-radius: 8px;
+        }
+        window.flamenote-settings textview,
+        window.flamenote-settings textview text {
+            background-color: #ffffff;
+            color: #1e1e2e;
+            font-size: 14px;
+        }
         window.flamenote-settings label.hint {
             color: #6c7086;
             font-size: 12px;
@@ -105,11 +147,14 @@ pub fn install_style() {
     }
 }
 
-pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
+pub fn build_toolbox(actions: Vec<ToolAction>) -> Toolbox {
+    let actions = Rc::new(actions);
+    let count = actions.len().max(1);
+    let width = toolbox_width(count);
     let window = gtk::Window::new(gtk::WindowType::Popup);
     prepare_floating(&window, false, 18);
     window.set_title("flamenote");
-    window.set_default_size(TOOLBOX_W, TOOLBOX_H);
+    window.set_default_size(width, TOOLBOX_H);
     window.set_resizable(false);
     window.add_events(
         EventMask::BUTTON_PRESS_MASK
@@ -120,7 +165,7 @@ pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
     let enabled = Rc::new(Cell::new(false));
     let hover = Rc::new(Cell::new(None::<usize>));
     let area = gtk::EventBox::new();
-    area.set_size_request(TOOLBOX_W, TOOLBOX_H);
+    area.set_size_request(width, TOOLBOX_H);
     area.set_visible_window(true);
     area.set_app_paintable(true);
     use_rgba(&area);
@@ -135,10 +180,11 @@ pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
             select_pointer_events(&gdk_win);
         }
     });
-    area.set_tooltip_text(Some("Nenhum texto selecionado na janela em foco"));
+    area.set_tooltip_text(Some(TOOLTIP_DISABLED));
 
     let enabled_draw = enabled.clone();
     let hover_draw = hover.clone();
+    let actions_draw = actions.clone();
     area.connect_draw(move |widget, cr| {
         let alloc = widget.allocation();
         paint_toolbox(
@@ -147,20 +193,27 @@ pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
             alloc.height() as f64,
             enabled_draw.get(),
             hover_draw.get(),
+            &actions_draw,
         );
         glib::Propagation::Stop
     });
 
     let enabled_motion = enabled.clone();
     let hover_motion = hover.clone();
+    let actions_motion = actions.clone();
     area.connect_motion_notify_event(move |widget, event| {
         let (x, y) = event.position();
         let alloc = widget.allocation();
-        let inside = button_at(x, y, alloc.width() as f64, alloc.height() as f64);
+        let inside = button_at(x, y, alloc.width() as f64, alloc.height() as f64, count);
         let next = if enabled_motion.get() { inside } else { None };
         if next != hover_motion.get() {
             hover_motion.set(next);
             widget.queue_draw();
+            let tooltip = match next.and_then(|index| actions_motion.get(index)) {
+                Some(action) => action.tooltip.clone(),
+                None => TOOLTIP_ENABLED.to_string(),
+            };
+            widget.set_tooltip_text(Some(&tooltip));
             let cursor = if next.is_some() {
                 gdk::CursorType::Hand1
             } else {
@@ -181,12 +234,12 @@ pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
             hover_leave.set(None);
             widget.queue_draw();
         }
+        widget.set_tooltip_text(Some(TOOLTIP_ENABLED));
         glib::Propagation::Proceed
     });
 
     let enabled_click = enabled.clone();
-    let note_click = on_note.clone();
-    let file_click = on_file.clone();
+    let actions_click = actions.clone();
     area.connect_button_press_event(move |widget, event| {
         if event.button() != 1 || event.event_type() != gdk::EventType::ButtonPress {
             return glib::Propagation::Proceed;
@@ -196,16 +249,15 @@ pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
         }
         let (x, y) = event.position();
         let alloc = widget.allocation();
-        match button_at(x, y, alloc.width() as f64, alloc.height() as f64) {
-            Some(BUTTON_NOTE) => {
-                note_click();
-                glib::Propagation::Stop
-            }
-            Some(BUTTON_FILE) => {
-                file_click();
-                glib::Propagation::Stop
-            }
-            _ => glib::Propagation::Proceed,
+        match button_at(x, y, alloc.width() as f64, alloc.height() as f64, count) {
+            Some(index) => match actions_click.get(index) {
+                Some(action) => {
+                    (action.run)();
+                    glib::Propagation::Stop
+                }
+                None => glib::Propagation::Proceed,
+            },
+            None => glib::Propagation::Proceed,
         }
     });
 
@@ -214,7 +266,14 @@ pub fn build_toolbox(on_note: Rc<dyn Fn()>, on_file: Rc<dyn Fn()>) -> Toolbox {
         window,
         enabled,
         area,
+        width,
     }
+}
+
+fn toolbox_width(count: usize) -> i32 {
+    let count = count.max(1) as f64;
+    (SHADOW * 2.0 + BUTTON_PAD * 2.0 + BUTTON_SIDE * count + BUTTON_GAP * (count - 1.0)).round()
+        as i32
 }
 
 impl Toolbox {
@@ -224,15 +283,15 @@ impl Toolbox {
         }
         self.enabled.set(enabled);
         self.area.set_tooltip_text(Some(if enabled {
-            "Capturar o texto selecionado"
+            TOOLTIP_ENABLED
         } else {
-            "Nenhum texto selecionado na janela em foco"
+            TOOLTIP_DISABLED
         }));
         self.area.queue_draw();
     }
 
     pub fn show_near(&self, anchor_x: i32, anchor_y: i32) {
-        let (x, y) = place_near(anchor_x, anchor_y, TOOLBOX_W, TOOLBOX_H);
+        let (x, y) = place_near(anchor_x, anchor_y, self.width, TOOLBOX_H);
         self.window.move_(x, y);
         self.window.show_all();
         if let Some(win) = self.window.window() {
@@ -641,14 +700,22 @@ const HINT_LISTEN: &str = "Pressione o atalho. Esc cancela.";
 const HINT_SAVED: &str = "Atalho salvo.";
 const HINT_DIR_IDLE: &str = "Enter ou sair do campo salva a pasta.";
 const HINT_DIR_SAVED: &str = "Pasta salva.";
+const HINT_LLM_IDLE: &str = "As consultas usam /v1/chat/completions.";
+const HINT_LLM_SAVED: &str = "Configuração LLM salva.";
 
 pub struct Settings {
     window: gtk::Window,
     field: gtk::Entry,
     copies_field: gtk::Entry,
+    llm_base: gtk::Entry,
+    llm_model: gtk::Entry,
+    llm_key: gtk::Entry,
+    query_prompts: Vec<gtk::TextView>,
+    query_files: Vec<gtk::CheckButton>,
     listening: Rc<Cell<bool>>,
     saved: Rc<RefCell<String>>,
     saved_copies: Rc<RefCell<String>>,
+    saved_llm: Rc<RefCell<(LlmConfig, Vec<Query>)>>,
 }
 
 impl Settings {
@@ -675,15 +742,66 @@ impl Settings {
             self.copies_field.set_text(display);
         }
     }
+
+    pub fn set_llm(&self, llm: &LlmConfig, queries: &[Query]) {
+        *self.saved_llm.borrow_mut() = (llm.clone(), queries.to_vec());
+        let focused = self.llm_base.has_focus()
+            || self.llm_model.has_focus()
+            || self.llm_key.has_focus()
+            || self.query_prompts.iter().any(|view| view.has_focus())
+            || self.query_files.iter().any(|check| check.has_focus());
+        if focused {
+            return;
+        }
+        self.llm_base.set_text(&llm.base_url);
+        self.llm_model.set_text(&llm.model);
+        self.llm_key.set_text(&llm.api_key);
+        for (index, view) in self.query_prompts.iter().enumerate() {
+            let query = queries.get(index);
+            if let Some(buffer) = view.buffer() {
+                buffer.set_text(query.map(|query| query.prompt.as_str()).unwrap_or(""));
+            }
+            self.query_files[index].set_active(
+                query
+                    .map(|query| query.destination == QueryDestination::File)
+                    .unwrap_or(false),
+            );
+        }
+    }
 }
 
-pub fn build_settings(
-    initial: &str,
-    initial_copies_dir: &str,
-    on_listen: Rc<dyn Fn(bool)>,
-    on_save: Rc<dyn Fn(&Hotkey) -> Result<(), String>>,
-    on_save_copies_dir: Rc<dyn Fn(&str) -> Result<String, String>>,
-) -> Settings {
+pub struct SettingsInitial<'a> {
+    pub hotkey: &'a str,
+    pub copies_dir: &'a str,
+    pub llm: &'a LlmConfig,
+    pub queries: &'a [Query],
+}
+
+type ListenFn = Rc<dyn Fn(bool)>;
+type SaveHotkeyFn = Rc<dyn Fn(&Hotkey) -> Result<(), String>>;
+type SaveCopiesDirFn = Rc<dyn Fn(&str) -> Result<String, String>>;
+type SaveLlmFn = Rc<dyn Fn(&LlmConfig, &[Query]) -> Result<(), String>>;
+
+pub struct SettingsHandlers {
+    pub on_listen: ListenFn,
+    pub on_save_hotkey: SaveHotkeyFn,
+    pub on_save_copies_dir: SaveCopiesDirFn,
+    pub on_save_llm: SaveLlmFn,
+}
+
+pub fn build_settings(initial: SettingsInitial<'_>, handlers: SettingsHandlers) -> Settings {
+    let SettingsInitial {
+        hotkey: initial_hotkey,
+        copies_dir: initial_copies_dir,
+        llm: initial_llm,
+        queries: initial_queries,
+    } = initial;
+    let SettingsHandlers {
+        on_listen,
+        on_save_hotkey,
+        on_save_copies_dir,
+        on_save_llm,
+    } = handlers;
     let window = gtk::Window::new(gtk::WindowType::Toplevel);
     window.set_title("Configurações");
     window.set_resizable(false);
@@ -691,18 +809,24 @@ pub fn build_settings(
     window.set_type_hint(gdk::WindowTypeHint::Dialog);
     window.set_accept_focus(true);
     window.set_focus_on_map(true);
+    window.set_default_size(520, 640);
     window.style_context().add_class("flamenote-settings");
 
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    content.set_margin_top(20);
-    content.set_margin_bottom(20);
-    content.set_margin_start(20);
-    content.set_margin_end(20);
-    content.set_size_request(340, -1);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    content.set_margin_top(16);
+    content.set_margin_bottom(16);
+    content.set_margin_start(16);
+    content.set_margin_end(16);
 
     let title = gtk::Label::new(Some("Configurações"));
     title.set_xalign(0.0);
     title.style_context().add_class("title");
+
+    let notebook = gtk::Notebook::new();
+    notebook.set_show_border(false);
+
+    let general = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    general.set_border_width(12);
 
     let section = gtk::Label::new(Some("Atalho"));
     section.set_xalign(0.0);
@@ -710,7 +834,7 @@ pub fn build_settings(
     section.style_context().add_class("section");
 
     let field = gtk::Entry::new();
-    field.set_text(initial);
+    field.set_text(initial_hotkey);
     field.set_editable(false);
     field.set_can_focus(true);
     field.set_has_frame(false);
@@ -722,7 +846,7 @@ pub fn build_settings(
     let hint = gtk::Label::new(Some(HINT_IDLE));
     hint.set_xalign(0.0);
     hint.set_line_wrap(true);
-    hint.set_max_width_chars(42);
+    hint.set_max_width_chars(52);
     hint.style_context().add_class("hint");
 
     let dir_section = gtk::Label::new(Some("Pasta de destino"));
@@ -733,7 +857,7 @@ pub fn build_settings(
     let copies_field = gtk::Entry::new();
     copies_field.set_text(initial_copies_dir);
     copies_field.set_editable(true);
-    copies_field.set_width_chars(22);
+    copies_field.set_width_chars(34);
     copies_field.set_placeholder_text(Some("~/copias"));
     copies_field.set_tooltip_text(Some("Pasta onde o texto selecionado é salvo como arquivo"));
     copies_field.style_context().add_class("path");
@@ -741,21 +865,128 @@ pub fn build_settings(
     let dir_hint = gtk::Label::new(Some(HINT_DIR_IDLE));
     dir_hint.set_xalign(0.0);
     dir_hint.set_line_wrap(true);
-    dir_hint.set_max_width_chars(42);
+    dir_hint.set_max_width_chars(52);
     dir_hint.style_context().add_class("hint");
 
+    general.add(&section);
+    general.add(&field);
+    general.add(&hint);
+    general.add(&dir_section);
+    general.add(&copies_field);
+    general.add(&dir_hint);
+
+    let llm_page = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    llm_page.set_border_width(12);
+
+    let llm_section = gtk::Label::new(Some("Servidor LLM (compatível com OpenAI)"));
+    llm_section.set_xalign(0.0);
+    llm_section.set_margin_top(8);
+    llm_section.style_context().add_class("section");
+
+    let base_label = field_label("Base URL");
+    let llm_base = gtk::Entry::new();
+    llm_base.set_text(&initial_llm.base_url);
+    llm_base.set_width_chars(40);
+    llm_base.set_placeholder_text(Some("http://localhost:11434"));
+    llm_base.style_context().add_class("path");
+
+    let model_label = field_label("Modelo");
+    let llm_model = gtk::Entry::new();
+    llm_model.set_text(&initial_llm.model);
+    llm_model.set_width_chars(40);
+    llm_model.set_placeholder_text(Some("qwen3:14b"));
+    llm_model.style_context().add_class("path");
+
+    let key_label = field_label("Chave de API");
+    let llm_key = gtk::Entry::new();
+    llm_key.set_text(&initial_llm.api_key);
+    llm_key.set_width_chars(40);
+    llm_key.set_visibility(false);
+    llm_key.set_input_purpose(gtk::InputPurpose::Password);
+    llm_key.set_placeholder_text(Some("vazia em servidores locais"));
+    llm_key.style_context().add_class("path");
+
+    llm_page.add(&llm_section);
+    llm_page.add(&base_label);
+    llm_page.add(&llm_base);
+    llm_page.add(&model_label);
+    llm_page.add(&llm_model);
+    llm_page.add(&key_label);
+    llm_page.add(&llm_key);
+
+    let query_section = gtk::Label::new(Some("Consultas de pré-prompt"));
+    query_section.set_xalign(0.0);
+    query_section.set_margin_top(12);
+    query_section.style_context().add_class("section");
+    llm_page.add(&query_section);
+
+    let mut query_prompts = Vec::new();
+    let mut query_files = Vec::new();
+    for index in 0..MAX_QUERIES {
+        let query = initial_queries.get(index);
+        llm_page.add(&field_label(&format!("Consulta {}", index + 1)));
+
+        let view = gtk::TextView::new();
+        view.set_wrap_mode(gtk::WrapMode::WordChar);
+        view.set_accepts_tab(false);
+        view.set_left_margin(8);
+        view.set_right_margin(8);
+        view.set_top_margin(6);
+        view.set_bottom_margin(6);
+        if let Some(buffer) = view.buffer() {
+            buffer.set_text(query.map(|query| query.prompt.as_str()).unwrap_or(""));
+        }
+        let scroll = gtk::ScrolledWindow::new(None::<&gtk::Adjustment>, None::<&gtk::Adjustment>);
+        scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+        scroll.set_shadow_type(gtk::ShadowType::None);
+        scroll.set_size_request(-1, 64);
+        scroll.style_context().add_class("prompt");
+        scroll.add(&view);
+        llm_page.add(&scroll);
+
+        let check = gtk::CheckButton::with_label("Salvar em arquivo");
+        check.set_active(
+            query
+                .map(|query| query.destination == QueryDestination::File)
+                .unwrap_or(false),
+        );
+        llm_page.add(&check);
+
+        query_prompts.push(view);
+        query_files.push(check);
+    }
+
+    let destination_hint = gtk::Label::new(Some(
+        "Desmarcado: a resposta é copiada para a área de transferência.",
+    ));
+    destination_hint.set_xalign(0.0);
+    destination_hint.set_line_wrap(true);
+    destination_hint.set_max_width_chars(52);
+    destination_hint.style_context().add_class("hint");
+    llm_page.add(&destination_hint);
+
+    let save_llm = gtk::Button::with_label("Salvar configuração LLM");
+    let llm_hint = gtk::Label::new(Some(HINT_LLM_IDLE));
+    llm_hint.set_xalign(0.0);
+    llm_hint.set_line_wrap(true);
+    llm_hint.set_max_width_chars(52);
+    llm_hint.style_context().add_class("hint");
+    llm_page.add(&save_llm);
+    llm_page.add(&llm_hint);
+
+    notebook.append_page(&general, Some(&gtk::Label::new(Some("Geral"))));
+    notebook.append_page(&llm_page, Some(&gtk::Label::new(Some("LLM"))));
     content.add(&title);
-    content.add(&section);
-    content.add(&field);
-    content.add(&hint);
-    content.add(&dir_section);
-    content.add(&copies_field);
-    content.add(&dir_hint);
+    content.add(&notebook);
     window.add(&content);
 
     let listening = Rc::new(Cell::new(false));
-    let saved = Rc::new(RefCell::new(initial.to_string()));
+    let saved = Rc::new(RefCell::new(initial_hotkey.to_string()));
     let saved_copies = Rc::new(RefCell::new(initial_copies_dir.to_string()));
+    let saved_llm = Rc::new(RefCell::new((
+        initial_llm.clone(),
+        initial_queries.to_vec(),
+    )));
 
     let listening_click = listening.clone();
     let field_click = field.clone();
@@ -828,7 +1059,7 @@ pub fn build_settings(
             mod5: state.contains(gdk::ModifierType::MOD5_MASK),
         };
         match config::hotkey_from_capture(mods, &name) {
-            Ok(hotkey) => match on_save(&hotkey) {
+            Ok(hotkey) => match on_save_hotkey(&hotkey) {
                 Ok(()) => {
                     listening_key.set(false);
                     *saved_key.borrow_mut() = hotkey.display.clone();
@@ -898,6 +1129,64 @@ pub fn build_settings(
         glib::Propagation::Proceed
     });
 
+    let save_llm_click = {
+        let llm_base = llm_base.clone();
+        let llm_model = llm_model.clone();
+        let llm_key = llm_key.clone();
+        let prompts = query_prompts.clone();
+        let files = query_files.clone();
+        let hint = llm_hint.clone();
+        let saved = saved_llm.clone();
+        let on_save = on_save_llm.clone();
+        Rc::new(move || {
+            let llm = LlmConfig {
+                base_url: llm_base.text().trim().to_string(),
+                model: llm_model.text().trim().to_string(),
+                api_key: llm_key.text().trim().to_string(),
+            };
+            let mut queries = Vec::new();
+            for (view, check) in prompts.iter().zip(files.iter()) {
+                let Some(buffer) = view.buffer() else {
+                    continue;
+                };
+                let start = buffer.start_iter();
+                let end = buffer.end_iter();
+                let prompt = buffer
+                    .text(&start, &end, false)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if prompt.is_empty() {
+                    continue;
+                }
+                queries.push(Query {
+                    prompt,
+                    destination: if check.is_active() {
+                        QueryDestination::File
+                    } else {
+                        QueryDestination::Clipboard
+                    },
+                });
+            }
+            if !queries.is_empty() && (llm.base_url.is_empty() || llm.model.is_empty()) {
+                set_hint(
+                    &hint,
+                    "Defina a base URL e o modelo para usar as consultas.",
+                    true,
+                );
+                return;
+            }
+            match on_save(&llm, &queries) {
+                Ok(()) => {
+                    *saved.borrow_mut() = (llm, queries);
+                    set_hint(&hint, HINT_LLM_SAVED, false);
+                }
+                Err(message) => set_hint(&hint, &message, true),
+            }
+        }) as Rc<dyn Fn()>
+    };
+    save_llm.connect_clicked(move |_| save_llm_click());
+
     let listening_destroy = listening.clone();
     window.connect_destroy(move |_| {
         if listening_destroy.get() {
@@ -910,16 +1199,46 @@ pub fn build_settings(
         window,
         field,
         copies_field,
+        llm_base,
+        llm_model,
+        llm_key,
+        query_prompts,
+        query_files,
         listening,
         saved,
         saved_copies,
+        saved_llm,
     }
+}
+
+fn field_label(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(text));
+    label.set_xalign(0.0);
+    label.style_context().add_class("field");
+    label
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use glib::translate::ToGlibPtr;
+
+    #[test]
+    fn toolbox_width_follows_button_count() {
+        assert_eq!(toolbox_width(1), 96);
+        assert_eq!(toolbox_width(2), 146);
+        assert_eq!(toolbox_width(5), 296);
+    }
+
+    #[test]
+    fn button_at_maps_each_column() {
+        let width = toolbox_width(5) as f64;
+        assert_eq!(button_at(30.0, 30.0, width, 96.0, 5), Some(0));
+        assert_eq!(button_at(100.0, 30.0, width, 96.0, 5), Some(1));
+        assert_eq!(button_at(70.0, 30.0, width, 96.0, 5), None);
+        assert_eq!(button_at(260.0, 30.0, width, 96.0, 5), Some(4));
+        assert_eq!(button_at(290.0, 30.0, width, 96.0, 5), None);
+    }
 
     #[test]
     fn settings_window_captures_a_chord() {
@@ -942,22 +1261,48 @@ mod tests {
         let saved_cb = saved.clone();
         let saved_copies = Rc::new(RefCell::new(String::new()));
         let saved_copies_cb = saved_copies.clone();
+        let llm = LlmConfig {
+            base_url: "http://localhost:11434".into(),
+            model: "qwen3:14b".into(),
+            api_key: String::new(),
+        };
+        let queries = vec![Query {
+            prompt: "Resuma:".into(),
+            destination: QueryDestination::File,
+        }];
         let settings = build_settings(
-            "Super+Shift+N",
-            "~/copias",
-            Rc::new(|_| {}),
-            Rc::new(move |hotkey| {
-                *saved_cb.borrow_mut() = hotkey.display.clone();
-                Ok(())
-            }),
-            Rc::new(move |dir| {
-                let display = dir.to_string();
-                *saved_copies_cb.borrow_mut() = display.clone();
-                Ok(display)
-            }),
+            SettingsInitial {
+                hotkey: "Super+Shift+N",
+                copies_dir: "~/copias",
+                llm: &llm,
+                queries: &queries,
+            },
+            SettingsHandlers {
+                on_listen: Rc::new(|_| {}),
+                on_save_hotkey: Rc::new(move |hotkey| {
+                    *saved_cb.borrow_mut() = hotkey.display.clone();
+                    Ok(())
+                }),
+                on_save_copies_dir: Rc::new(move |dir| {
+                    let display = dir.to_string();
+                    *saved_copies_cb.borrow_mut() = display.clone();
+                    Ok(display)
+                }),
+                on_save_llm: Rc::new(|_, _| Ok(())),
+            },
         );
         assert_eq!(settings.field.text(), "Super+Shift+N");
         assert_eq!(settings.copies_field.text(), "~/copias");
+        assert_eq!(settings.llm_base.text(), "http://localhost:11434");
+        assert_eq!(settings.llm_model.text(), "qwen3:14b");
+        let buffer = settings.query_prompts[0].buffer().expect("buffer");
+        assert_eq!(
+            buffer
+                .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                .unwrap_or_default(),
+            "Resuma:"
+        );
+        assert!(settings.query_files[0].is_active());
         let window = settings.window.clone();
         window.show_all();
         let ctx = glib::MainContext::default();
@@ -1034,25 +1379,32 @@ fn clamp(value: i32, min: i32, max: i32) -> i32 {
     }
 }
 
-fn button_rects(w: f64, h: f64) -> [(f64, f64, f64, f64); 2] {
-    let pad = 12.0;
-    let side =
-        (h - SHADOW * 2.0 - pad * 2.0).min((w - SHADOW * 2.0 - pad * 2.0 - BUTTON_GAP) / 2.0);
-    let bx = SHADOW + pad;
-    let by = SHADOW + pad;
-    [
-        (bx, by, side, side),
-        (bx + side + BUTTON_GAP, by, side, side),
-    ]
+fn button_rects(w: f64, h: f64, count: usize) -> Vec<(f64, f64, f64, f64)> {
+    let count = count.max(1);
+    let side = (h - SHADOW * 2.0 - BUTTON_PAD * 2.0).min(
+        (w - SHADOW * 2.0 - BUTTON_PAD * 2.0 - BUTTON_GAP * (count as f64 - 1.0)) / count as f64,
+    );
+    let bx = SHADOW + BUTTON_PAD;
+    let by = SHADOW + BUTTON_PAD;
+    (0..count)
+        .map(|index| (bx + index as f64 * (side + BUTTON_GAP), by, side, side))
+        .collect()
 }
 
-fn button_at(x: f64, y: f64, w: f64, h: f64) -> Option<usize> {
-    button_rects(w, h)
+fn button_at(x: f64, y: f64, w: f64, h: f64, count: usize) -> Option<usize> {
+    button_rects(w, h, count)
         .iter()
         .position(|(bx, by, bs, _)| x >= *bx && y >= *by && x <= bx + bs && y <= by + bs)
 }
 
-fn paint_toolbox(cr: &cairo::Context, w: f64, h: f64, enabled: bool, hover: Option<usize>) {
+fn paint_toolbox(
+    cr: &cairo::Context,
+    w: f64,
+    h: f64,
+    enabled: bool,
+    hover: Option<usize>,
+    actions: &[ToolAction],
+) {
     cr.set_operator(cairo::Operator::Source);
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
     let _ = cr.paint();
@@ -1079,7 +1431,7 @@ fn paint_toolbox(cr: &cairo::Context, w: f64, h: f64, enabled: bool, hover: Opti
     cr.set_line_width(1.0);
     let _ = cr.stroke();
 
-    for (index, (bx, by, bs, _)) in button_rects(w, h).into_iter().enumerate() {
+    for (index, (bx, by, bs, _)) in button_rects(w, h, actions.len()).into_iter().enumerate() {
         rounded(cr, bx, by, bs, bs, 12.0);
         if enabled && hover == Some(index) {
             cr.set_source_rgba(0.271, 0.278, 0.353, 1.0);
@@ -1089,10 +1441,11 @@ fn paint_toolbox(cr: &cairo::Context, w: f64, h: f64, enabled: bool, hover: Opti
             cr.set_source_rgba(0.0, 0.0, 0.0, 0.12);
         }
         let _ = cr.fill();
-        match index {
-            BUTTON_NOTE => paint_tool_icon(cr, bx, by, bs, enabled),
-            BUTTON_FILE => paint_save_icon(cr, bx, by, bs, enabled),
-            _ => {}
+        match actions.get(index).map(|action| action.icon) {
+            Some(ToolIcon::Note) => paint_tool_icon(cr, bx, by, bs, enabled),
+            Some(ToolIcon::File) => paint_save_icon(cr, bx, by, bs, enabled),
+            Some(ToolIcon::Llm) => paint_llm_icon(cr, bx, by, bs, enabled),
+            None => {}
         }
     }
 }
@@ -1158,6 +1511,46 @@ fn paint_save_icon(cr: &cairo::Context, x: f64, y: f64, side: f64, enabled: bool
         2.0,
     );
     let _ = cr.fill();
+}
+
+fn paint_llm_icon(cr: &cairo::Context, x: f64, y: f64, side: f64, enabled: bool) {
+    let paper = if enabled {
+        (0.980, 0.702, 0.529)
+    } else {
+        (0.345, 0.357, 0.439)
+    };
+    let ink = if enabled {
+        (0.118, 0.118, 0.180)
+    } else {
+        (0.192, 0.196, 0.267)
+    };
+    let bx = x + side * 0.20;
+    let by = y + side * 0.20;
+    let bw = side * 0.60;
+    let bh = side * 0.42;
+
+    rounded(cr, bx, by, bw, bh, side * 0.12);
+    cr.set_source_rgb(paper.0, paper.1, paper.2);
+    let _ = cr.fill();
+
+    cr.move_to(bx + bw * 0.26, by + bh * 0.86);
+    cr.line_to(bx + bw * 0.18, by + bh + side * 0.13);
+    cr.line_to(bx + bw * 0.46, by + bh * 0.86);
+    cr.close_path();
+    let _ = cr.fill();
+
+    cr.set_source_rgb(ink.0, ink.1, ink.2);
+    let dot = (side * 0.036).max(1.2);
+    for index in 0..3 {
+        cr.arc(
+            bx + bw * (0.27 + 0.23 * index as f64),
+            by + bh * 0.5,
+            dot,
+            0.0,
+            std::f64::consts::TAU,
+        );
+        let _ = cr.fill();
+    }
 }
 
 fn paint_note(cr: &cairo::Context, w: f64, h: f64) {

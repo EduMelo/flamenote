@@ -2,7 +2,7 @@
 
 Notas flutuantes a partir do texto selecionado, no espírito do Flameshot.
 
-Ao iniciar, o programa fica na bandeja. Um atalho global arma a seleção: o cursor vira uma cruz e a caixa de ferramentas ainda não aparece. Esc nesse momento só devolve o cursor. Depois de selecionar texto na janela em foco, a caixa surge ao lado dessa seleção. A caixa tem duas ferramentas: a primeira coloca o texto num bilhete branco, de cantos arredondados, sempre por cima das outras janelas; a segunda grava o texto num arquivo `.txt` na pasta de destino e deixa esse arquivo na área de transferência, pronto para colar. O bilhete pode ser arrastado. Um clique duplo fecha o bilhete. Esc, com a caixa já aberta, fecha só a caixa.
+Ao iniciar, o programa fica na bandeja. Um atalho global arma a seleção: o cursor vira uma cruz e a caixa de ferramentas ainda não aparece. Esc nesse momento só devolve o cursor. Depois de selecionar texto na janela em foco, a caixa surge ao lado dessa seleção. A caixa tem duas ferramentas fixas: a primeira coloca o texto num bilhete branco, de cantos arredondados, sempre por cima das outras janelas; a segunda grava o texto num arquivo `.txt` na pasta de destino e deixa esse arquivo na área de transferência, pronto para colar. Consultas configuradas acrescentam até três botões que enviam o texto, com um pré-prompt, a um servidor compatível com OpenAI. O bilhete pode ser arrastado. Um clique duplo fecha o bilhete. Esc, com a caixa já aberta, fecha só a caixa.
 
 ## Requisitos
 
@@ -39,13 +39,28 @@ hotkey = "Super+Shift+N"
 # Pasta onde o texto selecionado é salvo como arquivo.
 # Aceita caminho absoluto ou começando com ~.
 copies_dir = "~/copias"
+
+[llm]
+base_url = "http://localhost:11434"
+model = "qwen3:14b"
+api_key = ""
+
+[[queries]]
+prompt = "Resuma em uma frase:"
+destination = "clipboard"
+
+[[queries]]
+prompt = "Liste as tarefas:"
+destination = "file"
 ```
 
 O atalho padrão é `Super+Shift+N`. Esc não pode ser o atalho. Durante a seleção, Esc só devolve o cursor. Com a caixa aberta, Esc fecha a caixa. Um atalho inválido volta para o padrão e a mensagem sai no terminal.
 
 A pasta de destino padrão é `~/copias`. Ela é criada quando o primeiro arquivo é salvo. Caminhos relativos são resolvidos a partir da pasta pessoal. Alterações no arquivo são relidas a cada 2 segundos.
 
-O clique direito na bandeja abre “Configurações”. O campo do atalho, ao ser clicado, captura a próxima combinação. Ela é gravada na hora nesse arquivo e passa a valer em seguida. O campo “Pasta de destino” grava a pasta ao pressionar Enter ou ao sair do campo; deixar vazio volta para `~/copias`.
+`[llm]` aceita qualquer servidor com o endpoint `/v1/chat/completions` no formato OpenAI. `base_url` pode terminar em `/v1` ou já incluir o caminho completo; sem sufixo, o flamenote acrescenta `/v1/chat/completions`. Deixe `api_key` vazia em servidores locais, como o Ollama. Até três `[[queries]]` podem ser definidas. O `prompt` é enviado como mensagem de sistema e o texto selecionado como mensagem do usuário. `destination = "file"` grava a resposta na pasta de destino e deixa o arquivo na área de transferência; `destination = "clipboard"` copia o texto da resposta. O limite de saída é de 4096 tokens; uma resposta cortada pelo servidor não é salva e gera uma notificação de truncamento. O arquivo de configuração guarda a chave de API em texto puro, mas é gravado com permissão `600`.
+
+O clique direito na bandeja abre “Configurações”. O campo do atalho, ao ser clicado, captura a próxima combinação. Ela é gravada na hora nesse arquivo e passa a valer em seguida. O campo “Pasta de destino” grava a pasta ao pressionar Enter ou ao sair do campo; deixar vazio volta para `~/copias`. Na aba “LLM”, o botão “Salvar configuração LLM” grava a URL, o modelo, a chave e as três consultas. Consultas com prompt vazio ficam desativadas.
 
 `FLAMENOTE_DEBUG=1` escreve no terminal o que a thread do X11 está fazendo.
 
@@ -59,6 +74,7 @@ O clique direito na bandeja abre “Configurações”. O campo do atalho, ao se
 - O clique direito na bandeja mostra “Selecionar texto”, “Configurações” e “Sair”.
 - O bilhete mostra o texto capturado, até 20 mil caracteres. Dá para arrastar. Um deslocamento menor que uns 3 pixels não conta como arrasto, para o clique duplo continuar fechando o bilhete.
 - O botão de arquivo usa até 30 caracteres da seleção como nome, trocando espaços por `_` e descartando outros caracteres. O texto é gravado com `.txt` na pasta de destino e o arquivo é copiado como item colável (`x-special/gnome-copied-files`), com uma notificação. Um nome repetido sobrescreve o arquivo anterior.
+- Cada consulta configurada ganha um botão com ícone de conversa; o tooltip mostra o pré-prompt. Ao clicar, a caixa fecha, o cursor fica livre e a requisição corre em segundo plano. Ao terminar, a resposta é gravada como arquivo ou copiada como texto, conforme o checkbox da consulta, e uma notificação informa o resultado ou o erro.
 - A roda do mouse rola o texto quando ele não cabe.
 
 ## Licença

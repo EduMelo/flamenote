@@ -9,7 +9,7 @@
 //! a outra janela não receberia o arrasto. O cursor do servidor é escondido
 //! (XFixes) e uma cruz preta de borda branca, sem área de entrada, segue o ponteiro.
 
-use crate::config::{self, Config, Hotkey};
+use crate::config::{self, Config, Hotkey, LlmConfig, Query};
 use std::collections::HashSet;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
@@ -66,6 +66,10 @@ pub enum AppEvent {
     },
     HotkeyChanged(String),
     CopiesDirChanged(PathBuf),
+    LlmChanged {
+        llm: LlmConfig,
+        queries: Vec<Query>,
+    },
 }
 
 pub enum Command {
@@ -897,7 +901,10 @@ impl X11 {
     fn apply_loaded(&mut self, next: Config, force_grab: bool) -> XResult<()> {
         let changed = next.hotkey != self.config.hotkey;
         let copies_changed = next.copies_dir != self.config.copies_dir;
+        let llm_changed = next.llm != self.config.llm || next.queries != self.config.queries;
         let copies_dir = next.copies_dir.clone();
+        let llm = next.llm.clone();
+        let queries = next.queries.clone();
         if changed && !self.hotkey_paused {
             self.ungrab_codes(&self.hotkey_codes.clone(), self.hotkey.modifiers)?;
         }
@@ -917,6 +924,9 @@ impl X11 {
         }
         if copies_changed {
             let _ = self.to_gtk.send(AppEvent::CopiesDirChanged(copies_dir));
+        }
+        if llm_changed {
+            let _ = self.to_gtk.send(AppEvent::LlmChanged { llm, queries });
         }
         if force_grab {
             self.hotkey_paused = false;

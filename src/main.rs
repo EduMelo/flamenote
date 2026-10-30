@@ -1,13 +1,15 @@
 //! Flamenote fica na bandeja. O atalho arma a seleção: o cursor vira uma
 //! cruz e a caixa de ferramentas só aparece junto do texto escolhido.
-//! A única ferramenta desta versão cola esse texto num bilhete branco,
-//! arrastável, que fecha com um clique duplo.
+//! As ferramentas criam um bilhete, gravam o texto num arquivo ou enviam o
+//! texto a até três consultas configuradas num servidor compatível com OpenAI.
 
 mod config;
 mod copies;
+mod llm;
 mod ui;
 mod x11svc;
 
+use config::{LlmConfig, Query, QueryDestination};
 use gio::prelude::ApplicationExt;
 use gtk::prelude::*;
 use std::cell::RefCell;
@@ -15,6 +17,12 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use x11svc::{AppEvent, Command};
+
+struct LlmOutcome {
+    query: usize,
+    destination: QueryDestination,
+    result: Result<String, String>,
+}
 
 struct App {
     gtk: gtk::Application,
@@ -26,6 +34,9 @@ struct App {
     config_path: std::path::PathBuf,
     hotkey_display: String,
     copies_dir: PathBuf,
+    llm: LlmConfig,
+    queries: Vec<Query>,
+    llm_tx: glib::Sender<LlmOutcome>,
     settings: Option<ui::Settings>,
     /// Mantém o processo vivo sem janelas. O guard libera o hold ao cair.
     _hold: gio::ApplicationHoldGuard,
@@ -75,6 +86,7 @@ fn start(gtk_app: gtk::Application) -> Rc<RefCell<App>> {
     eprintln!("Configuração: {}", cfg.path.display());
 
     let (to_gtk, from_x11) = glib::MainContext::channel(glib::Priority::DEFAULT);
+    let (llm_tx, llm_rx) = glib::MainContext::channel(glib::Priority::DEFAULT);
     let to_x11 = x11svc::spawn(cfg.clone(), to_gtk);
 
     let app = Rc::new(RefCell::new(App {
@@ -87,6 +99,9 @@ fn start(gtk_app: gtk::Application) -> Rc<RefCell<App>> {
         config_path: cfg.path.clone(),
         hotkey_display: cfg.hotkey.display,
         copies_dir: cfg.copies_dir.clone(),
+        llm: cfg.llm.clone(),
+        queries: cfg.queries.clone(),
+        llm_tx,
         settings: None,
         _hold: hold,
         _lock: Some(lock),
@@ -95,6 +110,11 @@ fn start(gtk_app: gtk::Application) -> Rc<RefCell<App>> {
     let app_events = app.clone();
     from_x11.attach(None, move |event| {
         on_event(&app_events, event);
+        glib::ControlFlow::Continue
+    });
+    let app_llm = app.clone();
+    llm_rx.attach(None, move |outcome| {
+        on_llm_outcome(&app_llm, outcome);
         glib::ControlFlow::Continue
     });
     app
@@ -126,6 +146,15 @@ fn on_event(app: &Rc<RefCell<App>>, event: AppEvent) {
                 settings.set_copies_dir(&config::display_path(&dir));
             }
         }
+        AppEvent::LlmChanged { llm, queries } => {
+            let mut this = app.borrow_mut();
+            this.llm = llm.clone();
+            this.queries = queries.clone();
+            if let Some(settings) = &this.settings {
+                settings.set_llm(&llm, &queries);
+            }
+            this.toolbox = None;
+        }
     }
 }
 
@@ -136,11 +165,25 @@ fn show_toolbox(app: &Rc<RefCell<App>>, x: i32, y: i32, text: String) {
         if this.toolbox.is_none() {
             let app_note = app.clone();
             let app_file = app.clone();
-            let toolbox = ui::build_toolbox(
-                Rc::new(move || capture(&app_note)),
-                Rc::new(move || save_selection_file(&app_file)),
-            );
-            this.toolbox = Some(toolbox);
+            let tx = this.llm_tx.clone();
+            let queries = this.queries.clone();
+            let mut actions = vec![
+                ui::ToolAction::new(ui::ToolIcon::Note, "Criar um bilhete", move || {
+                    capture(&app_note)
+                }),
+                ui::ToolAction::new(ui::ToolIcon::File, "Salvar como arquivo", move || {
+                    save_selection_file(&app_file)
+                }),
+            ];
+            for (index, query) in queries.into_iter().enumerate() {
+                let app_query = app.clone();
+                let tx_query = tx.clone();
+                let tooltip = query_tooltip(index, &query.prompt);
+                actions.push(ui::ToolAction::new(ui::ToolIcon::Llm, tooltip, move || {
+                    run_query(&app_query, &tx_query, index, &query)
+                }));
+            }
+            this.toolbox = Some(ui::build_toolbox(actions));
         }
         if let Some(toolbox) = &this.toolbox {
             toolbox.set_enabled(true);
@@ -189,19 +232,130 @@ fn save_selection_file(app: &Rc<RefCell<App>>) {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("arquivo");
-            let notification = gio::Notification::new(&format!("Arquivo '{name}' salvo"));
-            gtk_app.send_notification(None, &notification);
+            notify(&gtk_app, None, &format!("Arquivo '{name}' salvo"), None);
         }
         Err(err) => {
             eprintln!("flamenote: não salvei em {}: {err}", dir.display());
-            let notification = gio::Notification::new("Não salvei o arquivo");
-            notification.set_body(Some(&err.to_string()));
-            gtk_app.send_notification(None, &notification);
+            notify(
+                &gtk_app,
+                None,
+                "Não salvei o arquivo",
+                Some(&err.to_string()),
+            );
         }
     }
 
     let _ = app.borrow().to_x11.send(Command::CloseToolbox);
     app.borrow_mut().hide_toolbox();
+}
+
+fn run_query(app: &Rc<RefCell<App>>, tx: &glib::Sender<LlmOutcome>, index: usize, query: &Query) {
+    let (selection, llm, gtk_app) = {
+        let this = app.borrow();
+        let Some(selection) = this.selection.clone() else {
+            return;
+        };
+        (selection, this.llm.clone(), this.gtk.clone())
+    };
+
+    let _ = app.borrow().to_x11.send(Command::CloseToolbox);
+    app.borrow_mut().hide_toolbox();
+    let notification_id = format!("flamenote-llm-{}", index + 1);
+    notify(
+        &gtk_app,
+        Some(&notification_id),
+        &format!("Consulta {} em andamento", index + 1),
+        Some(&short_prompt(&query.prompt)),
+    );
+
+    let prompt = query.prompt.clone();
+    let destination = query.destination;
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let result = llm::complete(&llm, &prompt, &selection);
+        let _ = tx.send(LlmOutcome {
+            query: index,
+            destination,
+            result,
+        });
+    });
+}
+
+fn on_llm_outcome(app: &Rc<RefCell<App>>, outcome: LlmOutcome) {
+    let (gtk_app, copies_dir) = {
+        let this = app.borrow();
+        (this.gtk.clone(), this.copies_dir.clone())
+    };
+    let query = outcome.query + 1;
+    let notification_id = format!("flamenote-llm-{query}");
+    match outcome.result {
+        Ok(text) => match outcome.destination {
+            QueryDestination::File => match copies::save(&text, &copies_dir) {
+                Ok(path) => {
+                    copy_file_to_clipboard(&path);
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("arquivo");
+                    notify(
+                        &gtk_app,
+                        Some(&notification_id),
+                        &format!("Consulta {query}: arquivo '{name}' salvo"),
+                        None,
+                    );
+                }
+                Err(err) => {
+                    eprintln!("flamenote: não salvei em {}: {err}", copies_dir.display());
+                    notify(
+                        &gtk_app,
+                        Some(&notification_id),
+                        &format!("Consulta {query}: não salvei o arquivo"),
+                        Some(&err.to_string()),
+                    );
+                }
+            },
+            QueryDestination::Clipboard => {
+                copy_text_to_clipboard(&text);
+                notify(
+                    &gtk_app,
+                    Some(&notification_id),
+                    &format!("Consulta {query} copiada"),
+                    Some("Resposta na área de transferência."),
+                );
+            }
+        },
+        Err(message) => notify(
+            &gtk_app,
+            Some(&notification_id),
+            &format!("Consulta {query} falhou"),
+            Some(&message),
+        ),
+    }
+}
+
+fn notify(gtk_app: &gtk::Application, id: Option<&str>, title: &str, body: Option<&str>) {
+    let notification = gio::Notification::new(title);
+    if let Some(body) = body {
+        notification.set_body(Some(body));
+    }
+    gtk_app.send_notification(id, &notification);
+}
+
+fn short_prompt(prompt: &str) -> String {
+    let prompt = prompt.replace('\n', " ");
+    let mut short: String = prompt.chars().take(60).collect();
+    if prompt.chars().count() > 60 {
+        short.push('…');
+    }
+    short
+}
+
+fn query_tooltip(index: usize, prompt: &str) -> String {
+    format!("Consulta {}: {}", index + 1, short_prompt(prompt))
+}
+
+fn copy_text_to_clipboard(text: &str) {
+    gtk::Clipboard::get(&gdk::SELECTION_CLIPBOARD).set_text(text);
 }
 
 /// Copia o arquivo como item colável, como o `x-special/gnome-copied-files`
@@ -319,12 +473,14 @@ fn open_settings(app: &Rc<RefCell<App>>) {
         settings.present();
         return;
     }
-    let (path, display, copies_display, to_x11, gtk_app) = {
+    let (path, display, copies_display, llm_initial, queries_initial, to_x11, gtk_app) = {
         let this = app.borrow();
         (
             this.config_path.clone(),
             this.hotkey_display.clone(),
             config::display_path(&this.copies_dir),
+            this.llm.clone(),
+            this.queries.clone(),
             this.to_x11.clone(),
             this.gtk.clone(),
         )
@@ -343,8 +499,15 @@ fn open_settings(app: &Rc<RefCell<App>>) {
     let to_x11_hotkey = to_x11.clone();
     let app_save = app.clone();
     let on_save = Rc::new(move |hotkey: &config::Hotkey| {
-        let copies_dir = app_save.borrow().copies_dir.clone();
-        config::save_config(&path_hotkey, hotkey, &copies_dir)
+        let (copies_dir, llm, queries) = {
+            let this = app_save.borrow();
+            (
+                this.copies_dir.clone(),
+                this.llm.clone(),
+                this.queries.clone(),
+            )
+        };
+        config::save_config(&path_hotkey, hotkey, &copies_dir, &llm, &queries)
             .map_err(|err| format!("Não salvei o atalho: {err}"))?;
         app_save.borrow_mut().hotkey_display = hotkey.display.clone();
         let _ = to_x11_hotkey.send(Command::ReloadConfig);
@@ -358,17 +521,67 @@ fn open_settings(app: &Rc<RefCell<App>>) {
         if dir.exists() && !dir.is_dir() {
             return Err(format!("{} não é uma pasta", dir.display()));
         }
-        let hotkey =
-            config::parse_hotkey(&app_save_dir.borrow().hotkey_display).unwrap_or_else(|_| {
+        let (hotkey, llm, queries) = {
+            let this = app_save_dir.borrow();
+            let hotkey = config::parse_hotkey(&this.hotkey_display).unwrap_or_else(|_| {
                 config::parse_hotkey(config::DEFAULT_HOTKEY).expect("atalho padrão")
             });
-        config::save_config(&path_dir, &hotkey, &dir)
+            (hotkey, this.llm.clone(), this.queries.clone())
+        };
+        config::save_config(&path_dir, &hotkey, &dir, &llm, &queries)
             .map_err(|err| format!("Não salvei a pasta: {err}"))?;
         app_save_dir.borrow_mut().copies_dir = dir.clone();
         Ok(config::display_path(&dir))
     });
 
-    let settings = ui::build_settings(&display, &copies_display, on_listen, on_save, on_save_dir);
+    let path_llm = path.clone();
+    let app_save_llm = app.clone();
+    let on_save_llm = Rc::new(move |llm: &LlmConfig, queries: &[Query]| {
+        let llm = LlmConfig {
+            base_url: llm.base_url.trim().to_string(),
+            model: llm.model.trim().to_string(),
+            api_key: llm.api_key.trim().to_string(),
+        };
+        let queries: Vec<Query> = queries.iter().take(config::MAX_QUERIES).cloned().collect();
+        if !llm.base_url.is_empty()
+            && !llm.base_url.starts_with("http://")
+            && !llm.base_url.starts_with("https://")
+        {
+            return Err("A base URL deve começar com http:// ou https://.".into());
+        }
+        if !queries.is_empty() && (llm.base_url.is_empty() || llm.model.is_empty()) {
+            return Err("Defina a base URL e o modelo para usar as consultas.".into());
+        }
+        let (hotkey, copies_dir) = {
+            let this = app_save_llm.borrow();
+            let hotkey = config::parse_hotkey(&this.hotkey_display).unwrap_or_else(|_| {
+                config::parse_hotkey(config::DEFAULT_HOTKEY).expect("atalho padrão")
+            });
+            (hotkey, this.copies_dir.clone())
+        };
+        config::save_config(&path_llm, &hotkey, &copies_dir, &llm, &queries)
+            .map_err(|err| format!("Não salvei a configuração LLM: {err}"))?;
+        let mut this = app_save_llm.borrow_mut();
+        this.llm = llm;
+        this.queries = queries;
+        this.toolbox = None;
+        Ok(())
+    });
+
+    let settings = ui::build_settings(
+        ui::SettingsInitial {
+            hotkey: &display,
+            copies_dir: &copies_display,
+            llm: &llm_initial,
+            queries: &queries_initial,
+        },
+        ui::SettingsHandlers {
+            on_listen,
+            on_save_hotkey: on_save,
+            on_save_copies_dir: on_save_dir,
+            on_save_llm,
+        },
+    );
     let window = settings.window().clone();
     gtk_app.add_window(&window);
     app.borrow_mut().settings = Some(settings);
