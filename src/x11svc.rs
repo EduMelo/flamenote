@@ -19,7 +19,7 @@ use x11rb::connection::Connection;
 use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
 use x11rb::protocol::xfixes::ConnectionExt as _;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ClientMessageData, ClientMessageEvent, ConfigureNotifyEvent,
+    Arc, Atom, AtomEnum, ChangeGCAux, ClientMessageData, ClientMessageEvent, ConfigureNotifyEvent,
     ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask,
     GetPropertyReply, ImageFormat, ImageOrder, KeyPressEvent, ModMask, PropMode, Property,
     Rectangle, StackMode, Window, WindowClass, CLIENT_MESSAGE_EVENT,
@@ -280,7 +280,7 @@ impl X11 {
             WindowClass::INPUT_OUTPUT,
             visual,
             &CreateWindowAux::new()
-                .background_pixel(0x001e_1e2e)
+                .background_pixel(0x007c_1cb8)
                 .event_mask(
                     EventMask::EXPOSURE
                         | EventMask::BUTTON_PRESS
@@ -375,8 +375,9 @@ impl X11 {
             config_check: Instant::now(),
         };
         svc.resolve_keycodes(min_keycode, max_keycode)?;
-        svc.redraw()?;
         svc.conn.shape_query_version()?.reply()?;
+        svc.shape_icon_round()?;
+        svc.redraw()?;
         let fixes = svc.conn.xfixes_query_version(5, 0)?.reply()?;
         if fixes.major_version < 4 {
             eprintln!("flamenote: XFixes antigo demais para trocar o cursor.");
@@ -523,6 +524,49 @@ impl X11 {
             return Ok(());
         }
         self.dock()
+    }
+
+    /// Recorta a janela da bandeja num disco, para os cantos mostrarem a barra.
+    fn shape_icon_round(&self) -> XResult<()> {
+        let w = self.icon_w.max(1);
+        let h = self.icon_h.max(1);
+        let pixmap = self.conn.generate_id()?;
+        let gc = self.conn.generate_id()?;
+        self.conn.create_pixmap(1, pixmap, self.root, w, h)?;
+        self.conn
+            .create_gc(gc, pixmap, &CreateGCAux::new().foreground(0))?;
+        self.conn.poly_fill_rectangle(
+            pixmap,
+            gc,
+            &[Rectangle {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h,
+            }],
+        )?;
+        let side = w.min(h);
+        self.conn.change_gc(gc, &ChangeGCAux::new().foreground(1))?;
+        self.conn.poly_fill_arc(
+            pixmap,
+            gc,
+            &[Arc {
+                x: ((w - side) / 2) as i16,
+                y: ((h - side) / 2) as i16,
+                width: side,
+                height: side,
+                angle1: 0,
+                angle2: 23040,
+            }],
+        )?;
+        let shaped = self
+            .conn
+            .shape_mask(SO::SET, SK::BOUNDING, self.icon, 0, 0, pixmap)?
+            .check();
+        self.conn.free_gc(gc)?;
+        self.conn.free_pixmap(pixmap)?;
+        shaped?;
+        Ok(())
     }
 
     fn redraw(&self) -> XResult<()> {
@@ -1066,6 +1110,7 @@ impl X11 {
         if w != self.icon_w || h != self.icon_h {
             self.icon_w = w;
             self.icon_h = h;
+            self.shape_icon_round()?;
             self.redraw()?;
         }
         Ok(())
@@ -1542,76 +1587,164 @@ fn render_crosshair(lsb: bool) -> Vec<u8> {
             } else {
                 (255, 255, 255)
             };
-            write_pixel(&mut data, n, x, y, rgb, lsb);
+            write_pixel(&mut data, n, x, y, rgb, 255, lsb);
         }
     }
     data
 }
 
+/// Disco roxo com três línguas. As mesmas curvas estão em `assets/icon.svg`.
 fn render_icon(width: u16, height: u16, lsb: bool) -> Vec<u8> {
     let w = width as i32;
     let h = height as i32;
     let mut data = vec![0u8; (w * h * 4) as usize];
-    let x0 = (w as f32 * 0.16) as i32;
-    let y0 = (h as f32 * 0.14) as i32;
-    let x1 = w - x0;
-    let y1 = h - (h as f32 * 0.14) as i32;
-    let rad = ((x1 - x0).min(y1 - y0) / 4).max(2);
+    let tongues = [
+        (
+            tongue(
+                (102.0, 36.0),
+                (122.0, 50.0),
+                (108.0, 84.0),
+                (44.0, 102.0),
+                (70.0, 86.0),
+                (78.0, 48.0),
+            ),
+            ICON_ROSE,
+        ),
+        (
+            tongue(
+                (76.0, 18.0),
+                (98.0, 24.0),
+                (100.0, 62.0),
+                (46.0, 106.0),
+                (52.0, 74.0),
+                (58.0, 32.0),
+            ),
+            ICON_AMBER,
+        ),
+        (
+            tongue(
+                (42.0, 30.0),
+                (16.0, 38.0),
+                (18.0, 74.0),
+                (48.0, 104.0),
+                (64.0, 76.0),
+                (60.0, 44.0),
+            ),
+            ICON_GOLD,
+        ),
+    ];
+    let side = (w.min(h) as f32).max(1.0);
+    let ox = (w as f32 - side) * 0.5;
+    let oy = (h as f32 - side) * 0.5;
     for y in 0..h {
         for x in 0..w {
-            let mut rgb = (0x1e, 0x1e, 0x2e);
-            if in_round(x, y, x0, y0, x1, y1, rad) {
-                rgb = (0xf4, 0xf2, 0xf6);
-                let line_h = ((y1 - y0) / 11).max(1);
-                let lx0 = x0 + rad.max(2);
-                let lx1 = x1 - rad.max(2);
-                for (index, frac) in [0.36_f32, 0.52, 0.68].into_iter().enumerate() {
-                    let ly = y0 + ((y1 - y0) as f32 * frac) as i32;
-                    if y >= ly && y < ly + line_h && x >= lx0 && x < lx1 {
-                        rgb = if index == 1 {
-                            (0xfa, 0xb3, 0x87)
-                        } else {
-                            (0x6c, 0x70, 0x86)
-                        };
-                    }
+            let mut acc = [0u32; 3];
+            let mut n = 0u32;
+            for sy in [0.25_f32, 0.75] {
+                for sx in [0.25_f32, 0.75] {
+                    let dx = ((x as f32 + sx) - ox) / side * 128.0;
+                    let dy = ((y as f32 + sy) - oy) / side * 128.0;
+                    let Some(rgb) = icon_color(dx, dy, &tongues) else {
+                        continue;
+                    };
+                    acc[0] += u32::from(rgb.0);
+                    acc[1] += u32::from(rgb.1);
+                    acc[2] += u32::from(rgb.2);
+                    n += 1;
                 }
             }
-            write_pixel(&mut data, w, x, y, rgb, lsb);
+            if n == 0 {
+                write_pixel(&mut data, w, x, y, (0, 0, 0), 0, lsb);
+            } else {
+                let rgb = ((acc[0] / n) as u8, (acc[1] / n) as u8, (acc[2] / n) as u8);
+                write_pixel(&mut data, w, x, y, rgb, 255, lsb);
+            }
         }
     }
     data
 }
 
-fn in_round(x: i32, y: i32, x0: i32, y0: i32, x1: i32, y1: i32, rad: i32) -> bool {
-    if x < x0 || y < y0 || x >= x1 || y >= y1 {
-        return false;
-    }
-    let r = rad.min((x1 - x0) / 2).min((y1 - y0) / 2).max(1);
-    let (cx, cy) = if x < x0 + r && y < y0 + r {
-        (x0 + r, y0 + r)
-    } else if x >= x1 - r && y < y0 + r {
-        (x1 - r - 1, y0 + r)
-    } else if x < x0 + r && y >= y1 - r {
-        (x0 + r, y1 - r - 1)
-    } else if x >= x1 - r && y >= y1 - r {
-        (x1 - r - 1, y1 - r - 1)
-    } else {
-        return true;
-    };
-    let dx = x - cx;
-    let dy = y - cy;
-    dx * dx + dy * dy <= r * r
+const ICON_PURPLE: (u8, u8, u8) = (0x7c, 0x1c, 0xb8);
+const ICON_GOLD: (u8, u8, u8) = (0xff, 0xe1, 0x4a);
+const ICON_AMBER: (u8, u8, u8) = (0xff, 0x7a, 0x1f);
+const ICON_ROSE: (u8, u8, u8) = (0xff, 0x4b, 0x86);
+
+fn tongue(
+    tip: (f32, f32),
+    outer_a: (f32, f32),
+    outer_b: (f32, f32),
+    tail: (f32, f32),
+    inner_a: (f32, f32),
+    inner_b: (f32, f32),
+) -> Vec<(f32, f32)> {
+    let mut pts = Vec::with_capacity(42);
+    bez(tip, outer_a, outer_b, tail, &mut pts);
+    bez(tail, inner_a, inner_b, tip, &mut pts);
+    pts
 }
 
-fn write_pixel(data: &mut [u8], width: i32, x: i32, y: i32, rgb: (u8, u8, u8), lsb: bool) {
+fn bez(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32), out: &mut Vec<(f32, f32)>) {
+    const N: i32 = 20;
+    let start = if out.is_empty() { 0 } else { 1 };
+    for i in start..=N {
+        let t = i as f32 / N as f32;
+        let u = 1.0 - t;
+        let mix = |a: f32, b: f32, c: f32, d: f32| {
+            u * u * u * a + 3.0 * u * u * t * b + 3.0 * u * t * t * c + t * t * t * d
+        };
+        out.push((mix(p0.0, p1.0, p2.0, p3.0), mix(p0.1, p1.1, p2.1, p3.1)));
+    }
+}
+
+fn icon_color(x: f32, y: f32, tongues: &[(Vec<(f32, f32)>, (u8, u8, u8))]) -> Option<(u8, u8, u8)> {
+    let dx = x - 64.0;
+    let dy = y - 64.0;
+    if dx * dx + dy * dy > 64.0 * 64.0 {
+        return None;
+    }
+    let mut color = ICON_PURPLE;
+    for (poly, rgb) in tongues {
+        if covers(poly, x, y) {
+            color = *rgb;
+        }
+    }
+    Some(color)
+}
+
+fn covers(poly: &[(f32, f32)], x: f32, y: f32) -> bool {
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        if (yi > y) != (yj > y) {
+            let cross = (xj - xi) * (y - yi) / (yj - yi) + xi;
+            if x < cross {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    inside
+}
+
+fn write_pixel(
+    data: &mut [u8],
+    width: i32,
+    x: i32,
+    y: i32,
+    rgb: (u8, u8, u8),
+    alpha: u8,
+    lsb: bool,
+) {
     let i = ((y * width + x) * 4) as usize;
     if lsb {
         data[i] = rgb.2;
         data[i + 1] = rgb.1;
         data[i + 2] = rgb.0;
-        data[i + 3] = 0xff;
+        data[i + 3] = alpha;
     } else {
-        data[i] = 0xff;
+        data[i] = alpha;
         data[i + 1] = rgb.0;
         data[i + 2] = rgb.1;
         data[i + 3] = rgb.2;
@@ -1678,6 +1811,61 @@ mod tests {
                 }
             }
             assert!(black > 0 && white > black, "preto {black}, branco {white}");
+        }
+    }
+
+    fn icon_rgba(data: &[u8], n: i32, x: i32, y: i32, lsb: bool) -> [u8; 4] {
+        let i = ((y * n + x) * 4) as usize;
+        let b = &data[i..i + 4];
+        if lsb {
+            [b[2], b[1], b[0], b[3]]
+        } else {
+            [b[1], b[2], b[3], b[0]]
+        }
+    }
+
+    #[test]
+    fn tray_icon_is_a_purple_disc_with_three_flames() {
+        for lsb in [false, true] {
+            for n in [22_i32, 48] {
+                let data = render_icon(n as u16, n as u16, lsb);
+                assert_eq!(
+                    icon_rgba(&data, n, 0, 0, lsb)[3],
+                    0,
+                    "canto de fora do disco"
+                );
+                let top = icon_rgba(&data, n, n / 2, 2, lsb);
+                assert!(
+                    top[3] == 255 && top[2] > top[0] && top[2] > 100,
+                    "topo {top:?}"
+                );
+                let mut gold = 0;
+                let mut amber = 0;
+                let mut rose = 0;
+                let mut purple = 0;
+                for y in 0..n {
+                    for x in 0..n {
+                        let px = icon_rgba(&data, n, x, y, lsb);
+                        if px[3] == 0 {
+                            continue;
+                        }
+                        let (r, g, b) = (px[0], px[1], px[2]);
+                        if r > 200 && g > 160 {
+                            gold += 1;
+                        } else if r > 200 && g > 70 && b < 90 {
+                            amber += 1;
+                        } else if r > 180 && b > 60 && g < 160 {
+                            rose += 1;
+                        } else if b > r && b > 80 {
+                            purple += 1;
+                        }
+                    }
+                }
+                assert!(gold > 20, "amarelo {gold} em {n}");
+                assert!(amber > 20, "laranja {amber} em {n}");
+                assert!(rose > 15, "rosa {rose} em {n}");
+                assert!(purple > n * n / 5, "roxo {purple} em {n}");
+            }
         }
     }
 }

@@ -1,5 +1,9 @@
 # flamenote
 
+<p align="center">
+  <img src="assets/icon.svg" width="128" height="128" alt="flamenote icon">
+</p>
+
 Floating notes from selected text, in the spirit of Flameshot.
 
 When it starts, the program lives in the tray. A global hotkey arms selection: the cursor turns into a crosshair and the toolbox does not appear yet. At that point, Esc only restores the cursor. After you select text in the focused window, the toolbox appears next to that selection. The toolbox has two fixed tools: the first puts the text on a light, rounded-corner note that always stays above other windows; the second saves the text to a `.txt` file in the destination folder and leaves that file on the clipboard, ready to paste. Configured queries add up to three buttons that send the text, with a preprompt, to an OpenAI-compatible server. The note can be dragged, resized from its edges, and its text can be edited. The corner icons copy all content, toggle editing, and open an eight-color palette. Double-clicking closes the note. With the toolbox already open, Esc closes only the toolbox.
