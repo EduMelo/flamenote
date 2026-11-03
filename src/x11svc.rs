@@ -280,7 +280,7 @@ impl X11 {
             WindowClass::INPUT_OUTPUT,
             visual,
             &CreateWindowAux::new()
-                .background_pixel(0x007c_1cb8)
+                .background_pixel(0x0000_c2d8)
                 .event_mask(
                     EventMask::EXPOSURE
                         | EventMask::BUTTON_PRESS
@@ -1593,7 +1593,7 @@ fn render_crosshair(lsb: bool) -> Vec<u8> {
     data
 }
 
-/// Disco roxo com três línguas. As mesmas curvas estão em `assets/icon.svg`.
+/// Disco ciano com três línguas. As mesmas curvas estão em `assets/icon.svg`.
 fn render_icon(width: u16, height: u16, lsb: bool) -> Vec<u8> {
     let w = width as i32;
     let h = height as i32;
@@ -1664,7 +1664,7 @@ fn render_icon(width: u16, height: u16, lsb: bool) -> Vec<u8> {
     data
 }
 
-const ICON_PURPLE: (u8, u8, u8) = (0x7c, 0x1c, 0xb8);
+const ICON_CYAN: (u8, u8, u8) = (0x00, 0xc2, 0xd8);
 const ICON_GOLD: (u8, u8, u8) = (0xff, 0xe1, 0x4a);
 const ICON_AMBER: (u8, u8, u8) = (0xff, 0x7a, 0x1f);
 const ICON_ROSE: (u8, u8, u8) = (0xff, 0x4b, 0x86);
@@ -1702,7 +1702,7 @@ fn icon_color(x: f32, y: f32, tongues: &[(Vec<(f32, f32)>, (u8, u8, u8))]) -> Op
     if dx * dx + dy * dy > 64.0 * 64.0 {
         return None;
     }
-    let mut color = ICON_PURPLE;
+    let mut color = ICON_CYAN;
     for (poly, rgb) in tongues {
         if covers(poly, x, y) {
             color = *rgb;
@@ -1825,7 +1825,7 @@ mod tests {
     }
 
     #[test]
-    fn tray_icon_is_a_purple_disc_with_three_flames() {
+    fn tray_icon_is_a_cyan_disc_with_three_flames() {
         for lsb in [false, true] {
             for n in [22_i32, 48] {
                 let data = render_icon(n as u16, n as u16, lsb);
@@ -1836,13 +1836,13 @@ mod tests {
                 );
                 let top = icon_rgba(&data, n, n / 2, 2, lsb);
                 assert!(
-                    top[3] == 255 && top[2] > top[0] && top[2] > 100,
+                    top[3] == 255 && top[0] < 40 && top[1] > 150 && top[2] > 180,
                     "topo {top:?}"
                 );
                 let mut gold = 0;
                 let mut amber = 0;
                 let mut rose = 0;
-                let mut purple = 0;
+                let mut cyan = 0;
                 for y in 0..n {
                     for x in 0..n {
                         let px = icon_rgba(&data, n, x, y, lsb);
@@ -1856,15 +1856,15 @@ mod tests {
                             amber += 1;
                         } else if r > 180 && b > 60 && g < 160 {
                             rose += 1;
-                        } else if b > r && b > 80 {
-                            purple += 1;
+                        } else if r < 80 && g > 120 && b > 140 {
+                            cyan += 1;
                         }
                     }
                 }
                 assert!(gold > 20, "amarelo {gold} em {n}");
                 assert!(amber > 20, "laranja {amber} em {n}");
                 assert!(rose > 15, "rosa {rose} em {n}");
-                assert!(purple > n * n / 5, "roxo {purple} em {n}");
+                assert!(cyan > n * n / 5, "ciano {cyan} em {n}");
             }
         }
     }

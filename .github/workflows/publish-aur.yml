@@ -22,7 +22,22 @@ jobs:
           token: ${{ secrets.REPOSITORY_TOKEN }}
 
       - name: Instalar dependências
-        run: pacman -Syu --noconfirm --needed git gtk3 libxkbcommon rust
+        run: pacman -Syu --noconfirm --needed curl git gtk3 libxkbcommon rust
+
+      - name: Gravar sha256 do tarball
+        run: |
+          pkgver="$(grep -m1 '^pkgver=' PKGBUILD | cut -d= -f2)"
+          url="https://github.com/EduMelo/flamenote/archive/refs/tags/v${pkgver}.tar.gz"
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsSL -o /tmp/flamenote-src.tar.gz "$url" && gzip -t /tmp/flamenote-src.tar.gz; then
+              break
+            fi
+            rm -f /tmp/flamenote-src.tar.gz
+            sleep 3
+          done
+          gzip -t /tmp/flamenote-src.tar.gz
+          sum="$(sha256sum /tmp/flamenote-src.tar.gz | awk '{print $1}')"
+          sed -i "s/^sha256sums=.*/sha256sums=('${sum}')/" PKGBUILD
 
       - name: Compilar
         run: |
